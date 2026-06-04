@@ -11,8 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@carbon-agent/local-store": "workspace:*",
     "@carbon-agent/shared-schemas": "workspace:*",
-    "@carbon-agent/local-store": "workspace:*"
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

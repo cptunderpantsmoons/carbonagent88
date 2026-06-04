@@ -8,7 +8,8 @@
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "dev": "electron .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist": "electron-builder"
   },
   "dependencies": {
     "@carbon-agent/shared-schemas": "workspace:*",
@@ -22,5 +23,34 @@
     "electron-builder": "^25.1.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.corporatecarbon.carbon-agent",
+    "productName": "Carbon Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "src/renderer/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
   }
 }

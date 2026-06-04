@@ -97,3 +97,11 @@ export function userMessageEvent(runId: string, content: string): RunEvent {
 export function assistantMessageEvent(runId: string, content: string): RunEvent {
   return createEvent(runId, "assistant_message", { content });
 }
+
+export function llmResponseEvent(runId: string, model: string, content: string, usage?: unknown): RunEvent {
+  return createEvent(runId, "llm_response", { model, content, usage });
+}
+
+export function toolCallErrorEvent(runId: string, toolName: string, error: string): RunEvent {
+  return createEvent(runId, "tool_call_error", { tool_name: toolName, error });
+}
