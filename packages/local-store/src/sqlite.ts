@@ -343,4 +343,68 @@ export class CarbonDatabase {
       runStmt(db, "UPDATE tool_calls SET completed_at = datetime('now') WHERE id = ?", [id]);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // DataSource & Document (ingestion pipeline)
+  // ---------------------------------------------------------------------------
+
+  async createDataSource(p: {
+    id: string;
+    workspaceId: string;
+    type: "file" | "browser_download" | "web_scrape";
+    name: string;
+    path: string;
+    mimeType?: string;
+    sizeBytes?: number;
+    sourceUrl?: string;
+    profileId?: string;
+  }) {
+    const db = await ensureDb();
+    runStmt(db,
+      `INSERT INTO data_sources (id, workspace_id, type, name, path, mime_type, size_bytes, source_url, profile_id, ingested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [p.id, p.workspaceId, p.type, p.name, p.path, p.mimeType ?? null, p.sizeBytes ?? null, p.sourceUrl ?? null, p.profileId ?? null]
+    );
+  }
+
+  async createDocument(p: {
+    id: string;
+    workspaceId: string;
+    dataSourceId: string;
+    title: string;
+    content: string;
+  }) {
+    const db = await ensureDb();
+    runStmt(db,
+      `INSERT INTO documents (id, workspace_id, data_source_id, title, content, chunk_count)
+       VALUES (?, ?, ?, ?, ?, 0)`,
+      [p.id, p.workspaceId, p.dataSourceId, p.title, p.content]
+    );
+  }
+
+  async updateDocumentChunkCount(documentId: string, chunkCount: number) {
+    const db = await ensureDb();
+    runStmt(db,
+      `UPDATE documents SET chunk_count = ?, updated_at = datetime('now') WHERE id = ?`,
+      [chunkCount, documentId]
+    );
+  }
+
+  async createIngestionJob(p: { id: string; documentId: string }) {
+    const db = await ensureDb();
+    runStmt(db,
+      `INSERT INTO ingestion_jobs (id, document_id, status, chunks_created) VALUES (?, ?, 'completed', 0)`,
+      [p.id, p.documentId]
+    );
+  }
+
+  async updateIngestionJob(id: string, p: { status: string; chunksCreated?: number; error?: string }) {
+    const db = await ensureDb();
+    const fields: string[] = ["status = ?", "updated_at = datetime('now')"];
+    const vals: unknown[] = [p.status];
+    if (p.chunksCreated !== undefined) { fields.push("chunks_created = ?"); vals.push(p.chunksCreated); }
+    if (p.error !== undefined) { fields.push("error = ?"); vals.push(p.error); }
+    vals.push(id);
+    runStmt(db, `UPDATE ingestion_jobs SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
 }

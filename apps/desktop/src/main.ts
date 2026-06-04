@@ -429,12 +429,44 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           },
           ingest_file: async (input) => {
             const parsed = parseFile(input.filePath, { sourceUrl: input.sourceUrl, profileId: input.profileId });
+
+            // 1. Create DataSource record
+            const dataSourceId = crypto.randomUUID();
+            let fileSizeBytes: number | undefined;
+            try { fileSizeBytes = fs.statSync(input.filePath).size; } catch { /* ignore */ }
+            await d.createDataSource({
+              id: dataSourceId,
+              workspaceId: input.workspaceId,
+              type: input.profileId ? "browser_download" : "file",
+              name: path.basename(input.filePath),
+              path: input.filePath,
+              mimeType: parsed.mimeType,
+              sizeBytes: fileSizeBytes,
+              sourceUrl: input.sourceUrl,
+              profileId: input.profileId,
+            });
+
+            // 2. Create Document record
+            const documentId = crypto.randomUUID();
+            await d.createDocument({
+              id: documentId,
+              workspaceId: input.workspaceId,
+              dataSourceId,
+              title: parsed.title,
+              content: parsed.content,
+            });
+
+            // 3. Create IngestionJob record (tracks this pipeline run)
+            const jobId = crypto.randomUUID();
+            await d.createIngestionJob({ id: jobId, documentId });
+
+            // 4. Chunk, embed, store
             const chunks = chunkText(parsed.content, { chunkSize: 1000, overlap: 200 });
             const embedder = new HashEmbeddingProvider();
             const embeddings = await embedder.embed(chunks.map(c => c.content));
             const stored = chunks.map((c, i) => ({
               id: crypto.randomUUID(),
-              documentId: crypto.randomUUID(), // In real impl, create Document record first
+              documentId,
               workspaceId: input.workspaceId,
               chunkIndex: c.index,
               content: c.content,
@@ -443,7 +475,12 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
               sourceProfileId: parsed.profileId,
             }));
             await storeChunks(stored);
-            return { success: true, chunksCreated: stored.length, documentTitle: parsed.title };
+
+            // 5. Update Document chunk_count and IngestionJob status
+            await d.updateDocumentChunkCount(documentId, stored.length);
+            await d.updateIngestionJob(jobId, { status: "completed", chunksCreated: stored.length });
+
+            return { success: true, chunksCreated: stored.length, documentId, documentTitle: parsed.title };
           },
           rag_retrieve: async (input) => {
             const results = await searchChunks(input.workspaceId, input.query, input.limit ?? 5);

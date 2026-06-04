@@ -63,6 +63,9 @@
 - Tests: 27/27 passing
 - Git: Commits on master
 
+## Post-MVP Fixes
+- [x] **`ingest_file` documentId fix** — `ingest_file` tool executor now creates a real `DataSource` record, a real `Document` record, and an `IngestionJob` record before chunking. `chunk_count` is updated on the document after storing. Tool returns `documentId` in its result for traceability. New DB methods added to `CarbonDatabase`: `createDataSource`, `createDocument`, `updateDocumentChunkCount`, `createIngestionJob`, `updateIngestionJob`.
+
 ---
 
 # JUDGE EVALUATION REPORT
