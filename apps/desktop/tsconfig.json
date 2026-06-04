@@ -14,11 +14,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "jsx": "react-jsx",
-    "paths": {
-      "@carbon-agent/shared-schemas": ["../../packages/shared-schemas/src"],
-      "@carbon-agent/local-store": ["../../packages/local-store/src"]
-    }
+    "jsx": "react-jsx"
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
