@@ -43,11 +43,13 @@
 - **Focus**: Phase 1 — Schemas, Local Store, JSONL Logger
 - **Files Modified**: See Phase 1 deliverables below
 - **Technical Details**: 
-  - Zod schemas define the full domain model with strict validation
-  - SQLite adapter uses better-sqlite3 with WAL mode for concurrent safety
-  - JSONL logger writes append-only events per agent run
-  - Filesystem layout rooted at `~/.carbon-agent/`
+  - Zod schemas define 14 domain models with strict validation (15 tests)
+  - SQLite adapter uses sql.js — pure JS, zero native deps
+  - JSONL logger with typed event builders for audit trail
+  - Filesystem layout: `~/.carbon-agent/{carbon.db,vault/,documents/,runs/}`
+  - Monorepo: 7 packages, strict layer ownership
 
 ## Build Status
-- Typecheck: Success
-- Tests: Success
+- Typecheck: Success (shared-schemas + local-store)
+- Tests: 26/26 passing (15 schema + 11 SQLite)
+- Git: 2 commits on master
