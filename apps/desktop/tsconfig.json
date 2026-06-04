@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false,
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@carbon-agent/shared-schemas": ["../../packages/shared-schemas/src"],
+      "@carbon-agent/local-store": ["../../packages/local-store/src"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

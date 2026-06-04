@@ -1,0 +1,26 @@
+{
+  "name": "carbon-agent-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "dev": "electron .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@carbon-agent/shared-schemas": "workspace:*",
+    "@carbon-agent/local-store": "workspace:*",
+    "@carbon-agent/core-runtime": "workspace:*",
+    "@carbon-agent/cloak-bridge": "workspace:*",
+    "@carbon-agent/ingestion": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

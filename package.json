@@ -1,0 +1,19 @@
+{
+  "name": "carbon-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Carbon Agent — enterprise document reasoning with authenticated browser sessions",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
