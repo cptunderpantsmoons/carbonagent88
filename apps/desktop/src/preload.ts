@@ -13,6 +13,11 @@ import type { IpcRequest, IpcResponse } from "@carbon-agent/shared-schemas";
 
 export interface CarbonAPI {
   invoke(request: IpcRequest): Promise<IpcResponse>;
+  onViewportFrame?: (callback: (frame: { buffer: ArrayBufferLike; mimeType: string }) => void) => () => void;
+  onAgentTopology?: (callback: (data: unknown) => void) => () => void;
+  onAXTree?: (callback: (data: unknown) => void) => () => void;
+  onWatcherAnalytics?: (callback: (data: unknown) => void) => () => void;
+  onVaultChange?: (callback: (data: { vaultId: string; path: string; content: string }) => void) => () => void;
 }
 
 const api: CarbonAPI = {

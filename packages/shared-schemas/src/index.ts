@@ -288,6 +288,17 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   // Ingestion
   z.object({ type: z.literal("ingestion/scan"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("ingestion/retry"), jobId: UuidSchema }),
+  // Watcher
+  z.object({ type: z.literal("watcher/list") }),
+  z.object({ type: z.literal("watcher/create"), data: z.object({ workspaceId: z.string(), cronExpression: z.string(), prompt: z.string(), enabled: z.boolean() }) }),
+  z.object({ type: z.literal("watcher/update"), id: UuidSchema, data: z.object({ workspaceId: z.string(), cronExpression: z.string(), prompt: z.string(), enabled: z.boolean() }) }),
+  z.object({ type: z.literal("watcher/toggle"), id: UuidSchema }),
+  z.object({ type: z.literal("watcher/delete"), id: UuidSchema }),
+  z.object({ type: z.literal("watcher/run"), id: UuidSchema }),
+  // Document generation
+  z.object({ type: z.literal("document/generate"), data: z.object({ workspaceId: z.string(), title: z.string(), content: z.string(), format: z.enum(["markdown", "docx", "pdf"]) }) }),
+  // Stats
+  z.object({ type: z.literal("stats/list") }),
 ]);
 
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
@@ -326,6 +337,17 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run/stream.complete") }),
   z.object({ type: z.literal("ingestion/scan.success"), jobs: z.array(IngestionJobSchema) }),
   z.object({ type: z.literal("ingestion/retry.success"), data: IngestionJobSchema }),
+  // Watcher responses
+  z.object({ type: z.literal("watcher/list.success"), data: z.array(z.record(z.unknown())) }),
+  z.object({ type: z.literal("watcher/create.success"), data: z.record(z.unknown()) }),
+  z.object({ type: z.literal("watcher/update.success"), data: z.record(z.unknown()) }),
+  z.object({ type: z.literal("watcher/toggle.success"), data: z.object({ id: z.string(), enabled: z.boolean() }) }),
+  z.object({ type: z.literal("watcher/delete.success") }),
+  z.object({ type: z.literal("watcher/run.success") }),
+  // Document generation responses
+  z.object({ type: z.literal("document/generate.success"), data: z.object({ filePath: z.string(), finalContent: z.string() }) }),
+  // Stats
+  z.object({ type: z.literal("stats/list.success"), activeRuns: z.number() }),
   // Errors
   z.object({ type: z.literal("error"), error: z.string(), code: z.string().optional() }),
   // Events (streaming)

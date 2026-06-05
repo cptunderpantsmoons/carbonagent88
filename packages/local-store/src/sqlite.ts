@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { getDatabasePath } from "./paths";
 import { fileURLToPath } from "node:url";
+import { encrypt, decrypt } from "./crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,7 +47,7 @@ function saveDb(db: Database): void {
   fs.writeFileSync(currentDbPath, Buffer.from(data));
 }
 
-async function ensureDb(): Promise<Database> {
+export async function ensureDb(): Promise<Database> {
   if (!sqlJs) {
     await initEngine();
     dbInstance = loadOrCreateDb();
@@ -146,6 +147,13 @@ function initTables(): void {
       input TEXT NOT NULL, output TEXT, error TEXT,
       started_at TEXT NOT NULL, completed_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS watchers (
+      id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      cron_expression TEXT NOT NULL, prompt TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+      profile_id TEXT REFERENCES browser_profiles(id),
+      last_run_at TEXT, last_run_status TEXT CHECK(last_run_status IN ('success','failed','running','pending')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 }
 
@@ -154,7 +162,7 @@ interface RowObj {
   [key: string]: unknown;
 }
 
-function getRow(db: Database, sql: string, params: unknown[] = []): RowObj | undefined {
+export function getRow(db: Database, sql: string, params: unknown[] = []): RowObj | undefined {
   const stmt = db.prepare(sql);
   stmt.bind(params as any);
   if (stmt.step()) {
@@ -166,7 +174,7 @@ function getRow(db: Database, sql: string, params: unknown[] = []): RowObj | und
   return undefined;
 }
 
-function getRows(db: Database, sql: string, params: unknown[] = []): RowObj[] {
+export function getRows(db: Database, sql: string, params: unknown[] = []): RowObj[] {
   const stmt = db.prepare(sql);
   stmt.bind(params as any);
   const rows: RowObj[] = [];
@@ -175,7 +183,7 @@ function getRows(db: Database, sql: string, params: unknown[] = []): RowObj[] {
   return rows;
 }
 
-function runStmt(db: Database, sql: string, params: unknown[] = []): void {
+export function runStmt(db: Database, sql: string, params: unknown[] = []): void {
   const stmt = db.prepare(sql);
   stmt.bind(params as any);
   stmt.step();
@@ -205,24 +213,54 @@ export class CarbonDatabase {
     return getRow(db, "SELECT id, type, name, base_url, model, created_at, updated_at FROM ai_providers WHERE id = ?", [id]);
   }
 
+  async getProviderWithKey(id: string) {
+    const db = await ensureDb();
+    const row = getRow(db, "SELECT id, type, name, api_key, base_url, model, created_at, updated_at FROM ai_providers WHERE id = ?", [id]);
+    if (row && row.api_key) {
+      try {
+        row.api_key = decrypt(row.api_key as string);
+      } catch {
+        // If decryption fails, assume it was stored plaintext (migration)
+      }
+    }
+    return row;
+  }
+
   async listProviders() {
     const db = await ensureDb();
     return getRows(db, "SELECT id, type, name, base_url, model, created_at, updated_at FROM ai_providers ORDER BY created_at DESC");
   }
 
+  async listProvidersWithKeys() {
+    const db = await ensureDb();
+    const rows = getRows(db, "SELECT id, type, name, api_key, base_url, model, created_at, updated_at FROM ai_providers ORDER BY created_at DESC");
+    for (const row of rows) {
+      if (row.api_key) {
+        try {
+          row.api_key = decrypt(row.api_key as string);
+        } catch {
+          // Plaintext fallback
+        }
+      }
+    }
+    return rows;
+  }
+
   async createProvider(p: { id: string; type: string; name: string; apiKey: string; baseUrl?: string; model: string }) {
     const db = await ensureDb();
+    const encryptedKey = encrypt(p.apiKey);
     runStmt(db, "INSERT INTO ai_providers (id, type, name, api_key, base_url, model) VALUES (?, ?, ?, ?, ?, ?)",
-      [p.id, p.type, p.name, p.apiKey, p.baseUrl ?? null, p.model]);
+      [p.id, p.type, p.name, encryptedKey, p.baseUrl ?? null, p.model]);
   }
 
   async updateProvider(p: { id: string; type?: string; name?: string; apiKey?: string; baseUrl?: string; model?: string }) {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    for (const k of ["type", "name", "apiKey", "baseUrl", "model"] as const) {
+    for (const k of ["type", "name", "baseUrl", "model"] as const) {
       if (p[k] !== undefined) { fields.push(`${k} = ?`); vals.push(p[k]); }
     }
+    if (p.apiKey !== undefined) { fields.push("api_key = ?"); vals.push(encrypt(p.apiKey)); }
     vals.push(p.id);
     runStmt(db, `UPDATE ai_providers SET ${fields.join(", ")} WHERE id = ?`, vals);
   }
@@ -406,5 +444,40 @@ export class CarbonDatabase {
     if (p.error !== undefined) { fields.push("error = ?"); vals.push(p.error); }
     vals.push(id);
     runStmt(db, `UPDATE ingestion_jobs SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+
+  async getWatcher(id: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM watchers WHERE id = ?", [id]);
+  }
+
+  async listWatchers() {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM watchers ORDER BY created_at DESC");
+  }
+
+  async createWatcher(p: { id: string; workspaceId: string; cronExpression: string; prompt: string; enabled: boolean }) {
+    const db = await ensureDb();
+    runStmt(db, "INSERT INTO watchers (id, workspace_id, cron_expression, prompt, enabled) VALUES (?, ?, ?, ?, ?)",
+      [p.id, p.workspaceId, p.cronExpression, p.prompt, p.enabled ? 1 : 0]);
+  }
+
+  async updateWatcher(p: { id: string; cronExpression?: string; prompt?: string; enabled?: boolean; lastRunAt?: string; lastRunStatus?: string }) {
+    const db = await ensureDb();
+    const fields: string[] = ["updated_at = datetime('now')"];
+    const vals: unknown[] = [];
+    if (p.cronExpression !== undefined) { fields.push("cron_expression = ?"); vals.push(p.cronExpression); }
+    if (p.prompt !== undefined) { fields.push("prompt = ?"); vals.push(p.prompt); }
+    if (p.enabled !== undefined) { fields.push("enabled = ?"); vals.push(p.enabled ? 1 : 0); }
+    if (p.lastRunAt !== undefined) { fields.push("last_run_at = ?"); vals.push(p.lastRunAt); }
+    if (p.lastRunStatus !== undefined) { fields.push("last_run_status = ?"); vals.push(p.lastRunStatus); }
+    vals.push(p.id);
+    runStmt(db, `UPDATE watchers SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async deleteWatcher(id: string) {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM watchers WHERE id = ?", [id]);
   }
 }

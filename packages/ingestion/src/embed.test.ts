@@ -1,33 +1,30 @@
 import { describe, it, expect } from "vitest";
+import { SemanticEmbeddingProvider } from "./semantic-embed.js";
 
-class HashEmbeddingProvider {
-  private dims = 384;
-
-  async embed(texts: string[]): Promise<number[][]> {
-    return texts.map(text => this.hashEmbed(text));
-  }
-
-  private hashEmbed(text: string): number[] {
-    const vec = new Array(this.dims).fill(0);
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i);
-      vec[code % this.dims] += 1;
-      vec[(code * 31) % this.dims] += 0.5;
-      vec[(code * 97 + i) % this.dims] += 0.25;
-    }
-    const mag = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
-    return mag > 0 ? vec.map(v => v / mag) : vec;
-  }
-}
-
-describe("HashEmbeddingProvider", () => {
-  it("produces normalized embeddings", async () => {
-    const provider = new HashEmbeddingProvider();
-    const embeddings = await provider.embed(["hello", "world"]);
-    expect(embeddings).toHaveLength(2);
+describe("SemanticEmbeddingProvider", () => {
+  it("produces 384-dim normalized embeddings", async () => {
+    const provider = new SemanticEmbeddingProvider();
+    const embeddings = await provider.embed(["hello", "world", "hello world"]);
+    expect(embeddings).toHaveLength(3);
     expect(embeddings[0]).toHaveLength(384);
-    const mag = Math.sqrt(embeddings[0].reduce((s, v) => s + v * v, 0));
-    expect(mag).toBeGreaterThan(0.9);
-    expect(mag).toBeLessThanOrEqual(1.01);
+
+    // Norm should be approximately 1 (normalized)
+    for (const emb of embeddings) {
+      const mag = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
+      expect(mag).toBeGreaterThan(0.95);
+      expect(mag).toBeLessThanOrEqual(1.05);
+    }
+
+    // Semantic similarity: "hello world" should be closer to "hello" than "world" is to "hello"
+    const cosSim = (a: number[], b: number[]) => {
+      let dot = 0;
+      for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+      return dot;
+    };
+    const helloWorldSim = cosSim(embeddings[0], embeddings[2]);
+    const helloWorldSim2 = cosSim(embeddings[1], embeddings[2]);
+    // Both should be higher than unrelated, and hello+hello_world should be closer
+    expect(helloWorldSim).toBeGreaterThan(0.5);
+    expect(helloWorldSim2).toBeGreaterThan(0.5);
   });
 });

@@ -12,11 +12,13 @@
     "dist": "electron-builder"
   },
   "dependencies": {
-    "@carbon-agent/shared-schemas": "workspace:*",
-    "@carbon-agent/local-store": "workspace:*",
-    "@carbon-agent/core-runtime": "workspace:*",
     "@carbon-agent/cloak-bridge": "workspace:*",
-    "@carbon-agent/ingestion": "workspace:*"
+    "@carbon-agent/core-runtime": "workspace:*",
+    "@carbon-agent/ingestion": "workspace:*",
+    "@carbon-agent/local-store": "workspace:*",
+    "@carbon-agent/shared-schemas": "workspace:*",
+    "docx": "^9.7.1",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "electron": "^33.0.0",

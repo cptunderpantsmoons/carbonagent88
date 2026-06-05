@@ -123,6 +123,17 @@ export interface ToolExecutor {
   stealth_open(input: { profileId: string; url: string }): Promise<unknown>;
   stealth_scrape(input: { profileId: string; url?: string }): Promise<unknown>;
   stealth_download(input: { profileId: string; url: string; filename?: string }): Promise<unknown>;
+  stealth_interact(input: { profileId: string; url: string; action: string }): Promise<unknown>;
+  stealth_screenshot(input: { profileId: string; url?: string }): Promise<unknown>;
+  stealth_evaluate(input: { profileId: string; url: string; script: string }): Promise<unknown>;
+  graph_query(input: { query: string; workspaceId: string }): Promise<unknown>;
+  generate_document(input: { format: string; content: string; title?: string; workspaceId: string }): Promise<unknown>;
+  stealth_axtree(input: { profileId: string }): Promise<unknown>;
+  recall_skill(input: { skillId: string }): Promise<unknown>;
+  store_skill(input: { name: string; trigger: string; definition: string }): Promise<unknown>;
+  vault_read(input: { vaultId: string; path: string }): Promise<unknown>;
+  vault_write(input: { vaultId: string; path: string; content: string }): Promise<unknown>;
+  vault_link(input: { vaultId: string; sourcePath: string; targetPath: string }): Promise<unknown>;
   ingest_file(input: { filePath: string; workspaceId: string; sourceUrl?: string; profileId?: string }): Promise<unknown>;
   rag_retrieve(input: { query: string; workspaceId: string; limit?: number }): Promise<unknown>;
   write_note(input: { title: string; content: string; workspaceId: string }): Promise<unknown>;
@@ -171,6 +182,7 @@ export class AgentRuntime {
 
     // Initialize run log
     const runLogPath = this.initRunLog(this.config.runId);
+    const MAX_HISTORY = 40; // Max messages to keep (system + user + tool cycles)
     this.logEvent(runLogPath, makeEvent(this.config.runId, "system_message", { message: `Agent run started. Max steps: ${maxSteps}` }));
     this.logEvent(runLogPath, makeEvent(this.config.runId, "user_message", { content: userMessage }));
 
@@ -217,7 +229,7 @@ Always cite your sources when answering from retrieved documents.`;
         });
       } catch (err: any) {
         const errorMsg = `LLM error: ${err.message ?? String(err)}`;
-        this.logEvent(runLogPath, makeEvent(this.config.runId, "tool_call_error", { tool_name: "llm", error: errorMsg }));
+        this.logEvent(runLogPath, makeEvent(this.config.runId, "llm_error", { error: errorMsg }));
         yield { type: "error", error: errorMsg };
         return;
       }
@@ -251,7 +263,7 @@ Always cite your sources when answering from retrieved documents.`;
 
           step.toolCalls!.push({ name: tc.name, input: tc.input, output, error });
 
-          // Add tool result to history
+          // Add tool result to history with rotation
           this.history.push({
             role: "assistant",
             content: `Tool call: ${tc.name}\nInput: ${JSON.stringify(tc.input)}`,
@@ -262,6 +274,12 @@ Always cite your sources when answering from retrieved documents.`;
               ? `Error executing ${tc.name}: ${error}`
               : `Result of ${tc.name}:\n${JSON.stringify(output, null, 2)}`,
           });
+        }
+
+        // Rotate history: keep system (idx 0) + last N messages
+        if (this.history.length > MAX_HISTORY) {
+          const systemMsg = this.history[0];
+          this.history = [systemMsg, ...this.history.slice(-(MAX_HISTORY - 1))];
         }
 
         this.steps.push(step);

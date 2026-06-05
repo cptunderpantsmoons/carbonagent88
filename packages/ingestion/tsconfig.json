@@ -16,6 +16,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
     "paths": {
       "@carbon-agent/shared-schemas": ["../../packages/shared-schemas/src"],
       "@carbon-agent/local-store": ["../../packages/local-store/src"]

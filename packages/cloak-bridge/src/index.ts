@@ -297,7 +297,7 @@ export async function stealthDownload(input: StealthDownloadInput): Promise<Stea
 // ---------------------------------------------------------------------------
 
 export async function closeAllBrowsers(): Promise<void> {
-  for (const [_id, browser] of activeBrowsers) {
+  for (const [, browser] of activeBrowsers) {
     try { await browser.close(); } catch { /* ignore */ }
   }
   activeBrowsers.clear();
