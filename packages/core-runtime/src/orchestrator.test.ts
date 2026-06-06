@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { SupervisorOrchestrator, SUB_AGENT_REGISTRY } from "./orchestrator.js";
 import type { ToolExecutor } from "./agent.js";
+import { BrowserOrchestrationRuntime } from "./index.js";
 
 const mockChat = vi.fn();
 vi.mock("./gateway.js", async (importOriginal) => {
@@ -122,6 +123,12 @@ describe("SupervisorOrchestrator", () => {
       expect(reflection.shouldRetry).toBe(true);
       expect(reflection.adjustedParams?.selector).toBe("#fixed");
       expect(reflection.success).toBe(true);
+    });
+  });
+
+  describe("package barrel", () => {
+    it("exports BrowserOrchestrationRuntime", () => {
+      expect(BrowserOrchestrationRuntime).toBeDefined();
     });
   });
 });
