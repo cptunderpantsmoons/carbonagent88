@@ -3,15 +3,29 @@
  *
  * Users assign providers to roles:
  *   - assistant: general-purpose conversations
+ *   - planner: orchestration planning
+ *   - browser: browser execution and collection
+ *   - knowledge-graph: knowledge extraction
+ *   - validator: evidence quality checks
+ *   - judge: completion and sufficiency decisions
  *   - coder: code generation/editing (e.g., umans-coder)
- *   - knowledge-graph: knowledge extraction (e.g., umans-flash-beta)
  *   - meeting-notes: summarization (e.g., umans-flash)
  *   - track-block: task tracking and project management
  */
 
 import { ensureDb, getRow, getRows, runStmt } from "./sqlite.js";
 
-export const MODEL_ROLES = ["assistant", "coder", "knowledge-graph", "meeting-notes", "track-block"] as const;
+export const MODEL_ROLES = [
+  "assistant",
+  "planner",
+  "browser",
+  "knowledge-graph",
+  "validator",
+  "judge",
+  "coder",
+  "meeting-notes",
+  "track-block",
+] as const;
 export type ModelRoleName = typeof MODEL_ROLES[number];
 
 export interface DbModelRole {

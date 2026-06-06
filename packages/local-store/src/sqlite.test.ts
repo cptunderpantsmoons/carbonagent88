@@ -145,6 +145,82 @@ describe("CarbonDatabase", () => {
     });
   });
 
+  describe("orchestration sessions", () => {
+    it("creates and reads an orchestration session with events and working set", async () => {
+      const workspaceId = "550e8400-e29b-41d4-a716-446655440010";
+      const conversationId = "550e8400-e29b-41d4-a716-446655440012";
+      const runId = "550e8400-e29b-41d4-a716-446655440013";
+      const sessionId = "550e8400-e29b-41d4-a716-446655440011";
+
+      await db.createWorkspace({
+        id: workspaceId,
+        name: "WS",
+        vaultDir: "/tmp/ws",
+      });
+      await db.createConversation({
+        id: conversationId,
+        workspaceId,
+      });
+      await db.createRun({
+        id: runId,
+        conversationId,
+        workspaceId,
+        providerId: null,
+        jsonlLogPath: "/tmp/orchestration-run.jsonl",
+      });
+
+      await db.createOrchestrationSession({
+        id: sessionId,
+        workspaceId,
+        conversationId,
+        runId,
+        rootKind: "outlook-thread",
+        rootJson: JSON.stringify({
+          threadId: "t-1",
+          threadSubject: "Month end",
+          mailbox: "finance@client.com",
+        }),
+        supervisionMode: "watch",
+        status: "running",
+        currentGoal: "Collect supporting financial data",
+      });
+
+      await db.appendSessionEvent({
+        id: "550e8400-e29b-41d4-a716-446655440014",
+        sessionId,
+        role: "planner",
+        kind: "plan_updated",
+        summary: "Search Outlook attachments first",
+        payloadJson: JSON.stringify({ sources: ["outlook-thread"] }),
+      });
+
+      await db.saveSessionWorkingSet({
+        sessionId,
+        entitiesJson: JSON.stringify([{ type: "client", name: "Acme" }]),
+        documentsJson: JSON.stringify([
+          {
+            id: "doc-1",
+            source: "outlook-thread",
+            title: "P&L draft",
+            confidence: 0.9,
+            provenance: ["event-1"],
+          },
+        ]),
+        metricsJson: JSON.stringify([]),
+        gapsJson: JSON.stringify(["Need Xero confirmation"]),
+        provenanceScore: 0.78,
+      });
+
+      const session = await db.getOrchestrationSession(sessionId);
+      const events = await db.listSessionEvents(sessionId);
+      const workingSet = await db.getSessionWorkingSet(sessionId);
+
+      expect(session?.current_goal).toBe("Collect supporting financial data");
+      expect(events).toHaveLength(1);
+      expect(JSON.parse(String(workingSet?.gaps_json))).toEqual(["Need Xero confirmation"]);
+    });
+  });
+
   describe("tool_calls", () => {
     it("records a tool call", async () => {
       await db.addToolCall({

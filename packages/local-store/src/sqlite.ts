@@ -115,6 +115,39 @@ function initTables(): void {
       started_at TEXT, completed_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS orchestration_sessions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      root_kind TEXT NOT NULL,
+      root_json TEXT NOT NULL,
+      supervision_mode TEXT NOT NULL CHECK(supervision_mode IN ('watch','confirm')),
+      status TEXT NOT NULL CHECK(status IN ('draft','running','waiting','completed','failed','cancelled')),
+      current_goal TEXT NOT NULL,
+      completion_summary TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS orchestration_session_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES orchestration_sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_orchestration_session_events_session ON orchestration_session_events(session_id, created_at, id);
+    CREATE TABLE IF NOT EXISTS orchestration_working_sets (
+      session_id TEXT PRIMARY KEY REFERENCES orchestration_sessions(id) ON DELETE CASCADE,
+      entities_json TEXT NOT NULL DEFAULT '[]',
+      documents_json TEXT NOT NULL DEFAULT '[]',
+      metrics_json TEXT NOT NULL DEFAULT '[]',
+      gaps_json TEXT NOT NULL DEFAULT '[]',
+      provenance_score REAL NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS data_sources (
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       type TEXT NOT NULL CHECK(type IN ('file','browser_download','web_scrape')),
@@ -417,6 +450,88 @@ export class CarbonDatabase {
     if (extra.completedAt) { fields.push("completed_at = ?"); vals.push(extra.completedAt); }
     vals.push(id);
     runStmt(db, `UPDATE runs SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async createOrchestrationSession(p: {
+    id: string;
+    workspaceId: string;
+    conversationId: string;
+    runId: string;
+    rootKind: string;
+    rootJson: string;
+    supervisionMode: "watch" | "confirm";
+    status: "draft" | "running" | "waiting" | "completed" | "failed" | "cancelled";
+    currentGoal: string;
+    completionSummary?: string | null;
+  }) {
+    const db = await ensureDb();
+    runStmt(db,
+      `INSERT INTO orchestration_sessions
+        (id, workspace_id, conversation_id, run_id, root_kind, root_json, supervision_mode, status, current_goal, completion_summary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, p.workspaceId, p.conversationId, p.runId, p.rootKind, p.rootJson, p.supervisionMode, p.status, p.currentGoal, p.completionSummary ?? null],
+    );
+  }
+
+  async getOrchestrationSession(id: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM orchestration_sessions WHERE id = ?", [id]);
+  }
+
+  async updateOrchestrationSessionStatus(id: string, status: string, completionSummary?: string | null) {
+    const db = await ensureDb();
+    runStmt(db,
+      `UPDATE orchestration_sessions
+       SET status = ?, completion_summary = COALESCE(?, completion_summary), updated_at = datetime('now')
+       WHERE id = ?`,
+      [status, completionSummary ?? null, id],
+    );
+  }
+
+  async appendSessionEvent(p: { id: string; sessionId: string; role: string; kind: string; summary: string; payloadJson: string }) {
+    const db = await ensureDb();
+    runStmt(db,
+      `INSERT INTO orchestration_session_events (id, session_id, role, kind, summary, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [p.id, p.sessionId, p.role, p.kind, p.summary, p.payloadJson],
+    );
+  }
+
+  async listSessionEvents(sessionId: string) {
+    const db = await ensureDb();
+    return getRows(db,
+      "SELECT * FROM orchestration_session_events WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+      [sessionId],
+    );
+  }
+
+  async saveSessionWorkingSet(p: {
+    sessionId: string;
+    entitiesJson: string;
+    documentsJson: string;
+    metricsJson: string;
+    gapsJson: string;
+    provenanceScore: number;
+  }) {
+    const db = await ensureDb();
+    runStmt(db,
+      `INSERT INTO orchestration_working_sets
+        (session_id, entities_json, documents_json, metrics_json, gaps_json, provenance_score, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(session_id) DO UPDATE SET
+        entities_json = excluded.entities_json,
+        documents_json = excluded.documents_json,
+        metrics_json = excluded.metrics_json,
+        gaps_json = excluded.gaps_json,
+        provenance_score = excluded.provenance_score,
+        updated_at = datetime('now')`,
+      [p.sessionId, p.entitiesJson, p.documentsJson, p.metricsJson, p.gapsJson, p.provenanceScore],
+    );
+  }
+
+  async getSessionWorkingSet(sessionId: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM orchestration_working_sets WHERE session_id = ?", [sessionId]);
   }
 
   async addToolCall(p: { id: string; runId: string; toolName: string; input: string; output?: string; error?: string }) {
