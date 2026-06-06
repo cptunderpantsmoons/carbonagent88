@@ -352,8 +352,147 @@ export const ToolCallSchema = z.object({
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
 // ---------------------------------------------------------------------------
+// Browser Orchestration
+// ---------------------------------------------------------------------------
+
+export const SupervisionModeSchema = z.enum(["watch", "confirm"]);
+
+export const SessionSourceSchema = z.enum([
+  "outlook-thread",
+  "sharepoint",
+  "monday",
+  "xero",
+  "spreadsheet-web",
+]);
+
+export const OrchestrationSessionStatusSchema = z.enum([
+  "draft",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+export const CoreAgentRoleSchema = z.enum([
+  "main-assistant",
+  "goals",
+  "planner",
+  "browser",
+  "knowledge",
+  "validator",
+  "judge",
+]);
+
+export const SessionRootSchema = z.object({
+  kind: z.literal("outlook-thread"),
+  threadId: z.string().min(1),
+  threadSubject: z.string().min(1),
+  mailbox: z.string().min(1),
+});
+
+export const WorkingSetDocumentSchema = z.object({
+  id: UuidSchema,
+  source: SessionSourceSchema,
+  title: z.string().min(1),
+  mimeType: z.string().nullable(),
+  filePath: z.string().nullable(),
+  sourceUrl: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  provenance: z.array(z.string()).default([]),
+});
+
+export const SessionEventKindSchema = z.enum([
+  "goal_defined",
+  "plan_updated",
+  "browser_action_started",
+  "browser_action_completed",
+  "document_discovered",
+  "document_acquired",
+  "working_set_updated",
+  "validation_passed",
+  "validation_failed",
+  "judgment_requested",
+  "judgment_returned",
+  "specialist_spawned",
+  "specialist_completed",
+  "output_approved",
+  "output_rejected",
+]);
+
+export const OrchestrationSessionSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  conversationId: UuidSchema,
+  runId: UuidSchema,
+  root: SessionRootSchema,
+  supervisionMode: SupervisionModeSchema,
+  status: OrchestrationSessionStatusSchema,
+  currentGoal: z.string().min(1),
+  completionSummary: z.string().nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type OrchestrationSession = z.infer<typeof OrchestrationSessionSchema>;
+
+export const SessionEventSchema = z.object({
+  id: UuidSchema,
+  sessionId: UuidSchema,
+  role: CoreAgentRoleSchema,
+  kind: SessionEventKindSchema,
+  summary: z.string().min(1),
+  payload: z.record(z.unknown()),
+  createdAt: TimestampSchema,
+});
+
+export type SessionEvent = z.infer<typeof SessionEventSchema>;
+
+export const SessionWorkingSetSchema = z.object({
+  sessionId: UuidSchema,
+  entities: z.array(z.record(z.unknown())).default([]),
+  documents: z.array(WorkingSetDocumentSchema).default([]),
+  metrics: z.array(z.record(z.unknown())).default([]),
+  gaps: z.array(z.string()).default([]),
+  provenanceScore: z.number().min(0).max(1).default(0),
+  updatedAt: TimestampSchema,
+});
+
+export type SessionWorkingSet = z.infer<typeof SessionWorkingSetSchema>;
+
+// ---------------------------------------------------------------------------
 // IPC Contracts — Renderer → Main (requests)
 // ---------------------------------------------------------------------------
+
+export const SessionCreateRequestSchema = z.object({
+  type: z.literal("session/create"),
+  workspaceId: UuidSchema,
+  conversationId: UuidSchema,
+  runId: UuidSchema,
+  root: SessionRootSchema,
+  supervisionMode: SupervisionModeSchema,
+  goal: z.string().min(1),
+});
+
+export const SessionStartRequestSchema = z.object({
+  type: z.literal("session/start"),
+  id: UuidSchema,
+});
+
+export const SessionGetRequestSchema = z.object({
+  type: z.literal("session/get"),
+  id: UuidSchema,
+});
+
+export const SessionEventsRequestSchema = z.object({
+  type: z.literal("session/events"),
+  id: UuidSchema,
+});
+
+export const SessionWorkingSetRequestSchema = z.object({
+  type: z.literal("session/working-set"),
+  id: UuidSchema,
+});
 
 export const IpcRequestSchema = z.discriminatedUnion("type", [
   // Provider
@@ -387,6 +526,12 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run/cancel"), id: UuidSchema }),
   z.object({ type: z.literal("run/stream"), id: UuidSchema, message: z.string() }),
   z.object({ type: z.literal("run/events"), id: UuidSchema }),
+  // Orchestration
+  SessionCreateRequestSchema,
+  SessionStartRequestSchema,
+  SessionGetRequestSchema,
+  SessionEventsRequestSchema,
+  SessionWorkingSetRequestSchema,
   // Ingestion
   z.object({ type: z.literal("ingestion/scan"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("ingestion/retry"), jobId: UuidSchema }),
@@ -446,6 +591,36 @@ export type IpcRequest = z.infer<typeof IpcRequestSchema>;
 // IPC Contracts — Main → Renderer (responses)
 // ---------------------------------------------------------------------------
 
+export const SessionCreateSuccessSchema = z.object({
+  type: z.literal("session/create.success"),
+  data: OrchestrationSessionSchema,
+});
+
+export const SessionGetSuccessSchema = z.object({
+  type: z.literal("session/get.success"),
+  data: OrchestrationSessionSchema,
+});
+
+export const SessionStartSuccessSchema = z.object({
+  type: z.literal("session/start.success"),
+  data: z.object({
+    runStatus: z.enum(["completed", "failed", "cancelled"]),
+    fullResponse: z.string(),
+    runError: z.string().optional(),
+    runId: UuidSchema,
+  }),
+});
+
+export const SessionEventsSuccessSchema = z.object({
+  type: z.literal("session/events.success"),
+  events: z.array(SessionEventSchema),
+});
+
+export const SessionWorkingSetSuccessSchema = z.object({
+  type: z.literal("session/working-set.success"),
+  data: SessionWorkingSetSchema,
+});
+
 export const IpcResponseSchema = z.discriminatedUnion("type", [
   // Success wrappers
   z.object({ type: z.literal("provider/list.success"), data: z.array(AIProviderConfigSchema) }),
@@ -475,6 +650,12 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run/stream.success"), chunk: z.string() }),
   z.object({ type: z.literal("run/stream.complete") }),
   z.object({ type: z.literal("run/events.success"), events: z.array(RunEventSchema) }),
+  // Orchestration responses
+  SessionCreateSuccessSchema,
+  SessionGetSuccessSchema,
+  SessionStartSuccessSchema,
+  SessionEventsSuccessSchema,
+  SessionWorkingSetSuccessSchema,
   z.object({ type: z.literal("ingestion/scan.success"), jobs: z.array(IngestionJobSchema) }),
   z.object({ type: z.literal("ingestion/retry.success"), data: IngestionJobSchema }),
   z.object({ type: z.literal("vault/list.success"), files: z.array(z.string()) }),

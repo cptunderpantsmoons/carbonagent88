@@ -4,6 +4,9 @@ import {
   BrowserProfileSchema,
   WorkspaceSchema,
   ConversationSchema,
+  OrchestrationSessionSchema,
+  SessionEventSchema,
+  SessionWorkingSetSchema,
   RunSchema,
   IpcRequestSchema,
   IpcResponseSchema,
@@ -171,6 +174,91 @@ describe("Schema Validation", () => {
         },
       });
       expect(result.type).toBe("llm_request");
+    });
+  });
+
+  describe("Orchestration session schemas", () => {
+    it("validates an email-thread-rooted orchestration session", () => {
+      const now = new Date().toISOString();
+      const result = OrchestrationSessionSchema.parse({
+        id: "550e8400-e29b-41d4-a716-446655440030",
+        workspaceId: "550e8400-e29b-41d4-a716-446655440031",
+        conversationId: "550e8400-e29b-41d4-a716-446655440032",
+        runId: "550e8400-e29b-41d4-a716-446655440033",
+        root: {
+          kind: "outlook-thread",
+          threadId: "AAMkAGI2-thread",
+          threadSubject: "Month end close",
+          mailbox: "finance@example.com",
+        },
+        supervisionMode: "watch",
+        status: "running",
+        currentGoal: "Collect reporting inputs from Outlook and SharePoint",
+        completionSummary: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      expect(result.root.threadSubject).toBe("Month end close");
+      expect(result.supervisionMode).toBe("watch");
+    });
+
+    it("validates structured session events and working sets", () => {
+      const now = new Date().toISOString();
+      const event = SessionEventSchema.parse({
+        id: "550e8400-e29b-41d4-a716-446655440034",
+        sessionId: "550e8400-e29b-41d4-a716-446655440030",
+        role: "judge",
+        kind: "judgment_returned",
+        summary: "More Xero evidence is required",
+        payload: { complete: false, gaps: ["Need Xero invoice total"] },
+        createdAt: now,
+      });
+
+      const workingSet = SessionWorkingSetSchema.parse({
+        sessionId: "550e8400-e29b-41d4-a716-446655440030",
+        entities: [{ type: "client", name: "Acme" }],
+        documents: [{
+          id: "550e8400-e29b-41d4-a716-446655440035",
+          source: "outlook-thread",
+          title: "Draft P&L.xlsx",
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          filePath: "/tmp/Draft-PL.xlsx",
+          sourceUrl: null,
+          confidence: 0.92,
+          provenance: ["550e8400-e29b-41d4-a716-446655440034"],
+        }],
+        metrics: [],
+        gaps: ["Need Xero invoice total"],
+        provenanceScore: 0.75,
+        updatedAt: now,
+      });
+
+      expect(event.kind).toBe("judgment_returned");
+      expect(workingSet.documents[0]?.source).toBe("outlook-thread");
+    });
+
+    it("rejects invalid supervision modes", () => {
+      expect(() =>
+        OrchestrationSessionSchema.parse({
+          id: "550e8400-e29b-41d4-a716-446655440030",
+          workspaceId: "550e8400-e29b-41d4-a716-446655440031",
+          conversationId: "550e8400-e29b-41d4-a716-446655440032",
+          runId: "550e8400-e29b-41d4-a716-446655440033",
+          root: {
+            kind: "outlook-thread",
+            threadId: "thread",
+            threadSubject: "Subject",
+            mailbox: "finance@example.com",
+          },
+          supervisionMode: "silent",
+          status: "running",
+          currentGoal: "Collect reporting inputs",
+          completionSummary: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      ).toThrow();
     });
   });
 
