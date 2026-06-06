@@ -10,13 +10,14 @@ import { AgentRuntime, type ToolExecutor, type AgentRunConfig, type AgentStep } 
 import type { LLMProvider } from "./gateway.js";
 import { createProvider } from "./gateway.js";
 
-export type SubAgentRole = "researcher" | "extractor" | "drafter" | "navigator" | "general";
+export type SubAgentRole = "researcher" | "extractor" | "drafter" | "navigator" | "general" | "claude-code" | "codex";
 
 export interface SubAgentDef {
   role: SubAgentRole;
   description: string;
   maxSteps: number;
   systemPrompt: string;
+  cli?: boolean;
 }
 
 export const SUB_AGENT_REGISTRY: Record<SubAgentRole, SubAgentDef> = {
@@ -59,6 +60,20 @@ Return the final page state and any extracted data.`,
     maxSteps: 20,
     systemPrompt: `You are a General Sub-Agent. Complete the assigned task using available tools.
 Be thorough and return clear results.`,
+  },
+  "claude-code": {
+    role: "claude-code",
+    description: "Claude Code CLI sub-agent. Full coding agent with file editing, terminal access, and multi-file reasoning. Best for complex code changes, refactoring, debugging, and implementation tasks.",
+    maxSteps: 0,
+    systemPrompt: "",
+    cli: true,
+  },
+  codex: {
+    role: "codex",
+    description: "OpenAI Codex CLI sub-agent. Autonomous coding agent sandboxed to the workspace. Best for code generation, analysis, and multi-step coding workflows.",
+    maxSteps: 0,
+    systemPrompt: "",
+    cli: true,
   },
 };
 

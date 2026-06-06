@@ -47,7 +47,9 @@ export const BrowserProfileSchema = z.object({
   id: UuidSchema,
   name: z.string().min(1).max(128),
   description: z.string().max(512).optional(),
-  profileDir: z.string().min(1), // absolute path to CloakBrowser profile
+  profileDir: z.string().optional(), // absolute path to CloakBrowser profile (optional for cloud CDP)
+  cdpUrl: z.string().url().optional(),
+  cdpFingerprint: z.string().optional(),
   targetDomains: z.array(z.string().url().or(z.string().min(1))),
   status: BrowserProfileStatusSchema,
   lastCheckedAt: TimestampSchema.nullable(),
@@ -155,6 +157,88 @@ export const RunEventSchema = z.object({
 
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
+export const LearnedSkillSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  trigger: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  toolSequence: z.array(z.object({
+    toolName: z.string().min(1),
+    input: z.record(z.unknown()),
+    notes: z.string().optional(),
+  })),
+  successCount: z.number().int().nonnegative(),
+  failureCount: z.number().int().nonnegative(),
+  consecutiveFailures: z.number().int().nonnegative().default(0),
+  version: z.number().int().positive().default(1),
+  lastUsedAt: TimestampSchema.nullable(),
+  pinned: z.boolean(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type LearnedSkill = z.infer<typeof LearnedSkillSchema>;
+
+// ---------------------------------------------------------------------------
+// Watcher
+// ---------------------------------------------------------------------------
+
+export const WatcherStatusSchema = z.enum(["success", "failed", "running", "pending"]);
+
+export const WatcherSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  name: z.string().min(1),
+  prompt: z.string().min(1),
+  cronExpression: z.string().min(1),
+  enabled: z.boolean(),
+  profileId: UuidSchema.nullable(),
+  lastRunAt: TimestampSchema.nullable(),
+  lastRunStatus: WatcherStatusSchema.nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type Watcher = z.infer<typeof WatcherSchema>;
+
+// ---------------------------------------------------------------------------
+// Agent Memory
+// ---------------------------------------------------------------------------
+
+export const AgentMemorySchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  key: z.string().min(1),
+  content: z.string(),
+  tags: z.array(z.string()),
+  source: z.string(),
+  importance: z.number(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type AgentMemory = z.infer<typeof AgentMemorySchema>;
+
+// ---------------------------------------------------------------------------
+// Model Roles
+// ---------------------------------------------------------------------------
+
+export const ModelRoleNameSchema = z.enum(["assistant", "coder", "knowledge-graph", "meeting-notes", "track-block"]);
+
+export type ModelRoleName = z.infer<typeof ModelRoleNameSchema>;
+
+export const ModelRoleSchema = z.object({
+  id: UuidSchema,
+  role: ModelRoleNameSchema,
+  providerId: UuidSchema,
+  workspaceId: UuidSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type ModelRole = z.infer<typeof ModelRoleSchema>;
+
 // ---------------------------------------------------------------------------
 // DataSource (ingested document source)
 // ---------------------------------------------------------------------------
@@ -193,6 +277,23 @@ export const DocumentSchema = z.object({
 });
 
 export type Document = z.infer<typeof DocumentSchema>;
+
+export const GeneratedDocumentSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  dataSourceId: UuidSchema,
+  title: z.string().max(512),
+  content: z.string(),
+  filePath: z.string().min(1),
+  mimeType: z.string().nullable().optional(),
+  sizeBytes: z.number().int().nonnegative().nullable().optional(),
+  format: z.enum(["markdown", "docx", "pdf", "unknown"]),
+  preview: z.string(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type GeneratedDocument = z.infer<typeof GeneratedDocumentSchema>;
 
 export const DocumentChunkSchema = z.object({
   id: UuidSchema,
@@ -264,7 +365,7 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   // Profile
   z.object({ type: z.literal("profile/list") }),
   z.object({ type: z.literal("profile/create"), data: BrowserProfileSchema.omit({ id: true, createdAt: true, updatedAt: true, status: true, lastCheckedAt: true }) }),
-  z.object({ type: z.literal("profile/update"), id: UuidSchema, data: z.object({ name: z.string().optional(), description: z.string().optional(), profileDir: z.string().optional(), targetDomains: z.array(z.string()).optional() }) }),
+  z.object({ type: z.literal("profile/update"), id: UuidSchema, data: z.object({ name: z.string().optional(), description: z.string().optional(), profileDir: z.string().optional(), cdpUrl: z.string().url().optional(), cdpFingerprint: z.string().optional(), targetDomains: z.array(z.string()).optional() }) }),
   z.object({ type: z.literal("profile/delete"), id: UuidSchema }),
   z.object({ type: z.literal("profile/health"), id: UuidSchema }),
   z.object({ type: z.literal("profile/launchLogin"), id: UuidSchema }),
@@ -285,18 +386,56 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run/get"), id: UuidSchema }),
   z.object({ type: z.literal("run/cancel"), id: UuidSchema }),
   z.object({ type: z.literal("run/stream"), id: UuidSchema, message: z.string() }),
+  z.object({ type: z.literal("run/events"), id: UuidSchema }),
   // Ingestion
   z.object({ type: z.literal("ingestion/scan"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("ingestion/retry"), jobId: UuidSchema }),
   // Watcher
   z.object({ type: z.literal("watcher/list") }),
-  z.object({ type: z.literal("watcher/create"), data: z.object({ workspaceId: z.string(), cronExpression: z.string(), prompt: z.string(), enabled: z.boolean() }) }),
-  z.object({ type: z.literal("watcher/update"), id: UuidSchema, data: z.object({ workspaceId: z.string(), cronExpression: z.string(), prompt: z.string(), enabled: z.boolean() }) }),
+  z.object({ type: z.literal("watcher/create"), data: z.object({ workspaceId: UuidSchema, name: z.string().min(1), cronExpression: z.string().min(1), prompt: z.string().min(1), enabled: z.boolean(), profileId: UuidSchema.nullable().optional() }) }),
+  z.object({ type: z.literal("watcher/update"), id: UuidSchema, data: z.object({ workspaceId: UuidSchema, name: z.string().min(1), cronExpression: z.string().min(1), prompt: z.string().min(1), enabled: z.boolean(), profileId: UuidSchema.nullable().optional() }) }),
   z.object({ type: z.literal("watcher/toggle"), id: UuidSchema }),
   z.object({ type: z.literal("watcher/delete"), id: UuidSchema }),
   z.object({ type: z.literal("watcher/run"), id: UuidSchema }),
   // Document generation
   z.object({ type: z.literal("document/generate"), data: z.object({ workspaceId: z.string(), title: z.string(), content: z.string(), format: z.enum(["markdown", "docx", "pdf"]) }) }),
+  // Vault / Documents / Skills
+  z.object({ type: z.literal("vault/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("vault/read"), workspaceId: UuidSchema, filePath: z.string().min(1) }),
+  z.object({ type: z.literal("vault/write"), workspaceId: UuidSchema, filePath: z.string().min(1), content: z.string() }),
+  z.object({ type: z.literal("document/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("document/open"), filePath: z.string().min(1) }),
+  z.object({ type: z.literal("document/reveal"), filePath: z.string().min(1) }),
+  z.object({ type: z.literal("skills/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("skills/pin"), id: UuidSchema, pinned: z.boolean() }),
+  z.object({ type: z.literal("skills/delete"), id: UuidSchema }),
+  z.object({ type: z.literal("skills/export"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("skills/import"), data: z.array(z.object({
+    id: z.string(),
+    workspaceId: z.string(),
+    trigger: z.string(),
+    triggerEmbedding: z.array(z.number()),
+    name: z.string(),
+    description: z.string(),
+    toolSequence: z.array(z.object({ toolName: z.string(), input: z.record(z.unknown()), notes: z.string().optional() })),
+    successCount: z.number(),
+    failureCount: z.number(),
+    pinned: z.boolean(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })) }),
+  // Live viewport
+  z.object({ type: z.literal("viewport/start"), profileId: UuidSchema }),
+  z.object({ type: z.literal("viewport/stop"), profileId: UuidSchema }),
+  // CLI detection
+  z.object({ type: z.literal("cli/detect") }),
+  // Memory
+  z.object({ type: z.literal("memory/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("memory/delete"), id: UuidSchema }),
+  // Model Roles
+  z.object({ type: z.literal("model-roles/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("model-roles/set"), data: z.object({ role: ModelRoleNameSchema, providerId: UuidSchema, workspaceId: UuidSchema }) }),
+  z.object({ type: z.literal("model-roles/delete"), role: ModelRoleNameSchema, workspaceId: UuidSchema }),
   // Stats
   z.object({ type: z.literal("stats/list") }),
 ]);
@@ -335,17 +474,45 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run/cancel.success") }),
   z.object({ type: z.literal("run/stream.success"), chunk: z.string() }),
   z.object({ type: z.literal("run/stream.complete") }),
+  z.object({ type: z.literal("run/events.success"), events: z.array(RunEventSchema) }),
   z.object({ type: z.literal("ingestion/scan.success"), jobs: z.array(IngestionJobSchema) }),
   z.object({ type: z.literal("ingestion/retry.success"), data: IngestionJobSchema }),
+  z.object({ type: z.literal("vault/list.success"), files: z.array(z.string()) }),
+  z.object({ type: z.literal("vault/read.success"), content: z.string() }),
+  z.object({ type: z.literal("vault/write.success") }),
+  z.object({ type: z.literal("document/list.success"), data: z.array(GeneratedDocumentSchema) }),
+  z.object({ type: z.literal("document/open.success") }),
+  z.object({ type: z.literal("document/reveal.success") }),
+  z.object({ type: z.literal("skills/list.success"), data: z.array(LearnedSkillSchema) }),
+  z.object({ type: z.literal("skills/pin.success"), data: z.object({ id: z.string(), pinned: z.boolean() }) }),
+  z.object({ type: z.literal("skills/delete.success") }),
+  z.object({ type: z.literal("skills/export.success"), data: z.array(z.unknown()) }),
+  z.object({ type: z.literal("skills/import.success"), data: z.object({ imported: z.number(), skipped: z.number() }) }),
   // Watcher responses
-  z.object({ type: z.literal("watcher/list.success"), data: z.array(z.record(z.unknown())) }),
-  z.object({ type: z.literal("watcher/create.success"), data: z.record(z.unknown()) }),
-  z.object({ type: z.literal("watcher/update.success"), data: z.record(z.unknown()) }),
+  z.object({ type: z.literal("watcher/list.success"), data: z.array(WatcherSchema) }),
+  z.object({ type: z.literal("watcher/create.success"), data: WatcherSchema }),
+  z.object({ type: z.literal("watcher/update.success"), data: WatcherSchema }),
   z.object({ type: z.literal("watcher/toggle.success"), data: z.object({ id: z.string(), enabled: z.boolean() }) }),
   z.object({ type: z.literal("watcher/delete.success") }),
   z.object({ type: z.literal("watcher/run.success") }),
   // Document generation responses
   z.object({ type: z.literal("document/generate.success"), data: z.object({ filePath: z.string(), finalContent: z.string() }) }),
+  z.object({ type: z.literal("viewport/start.success") }),
+  z.object({ type: z.literal("viewport/stop.success") }),
+  z.object({ type: z.literal("cli/detect.success"), data: z.array(z.object({
+    cli: z.enum(["claude-code", "codex"]),
+    installed: z.boolean(),
+    version: z.string().optional(),
+    error: z.string().optional(),
+    installCommand: z.string(),
+  })) }),
+  // Memory responses
+  z.object({ type: z.literal("memory/list.success"), data: z.array(AgentMemorySchema) }),
+  z.object({ type: z.literal("memory/delete.success") }),
+  // Model Roles responses
+  z.object({ type: z.literal("model-roles/list.success"), data: z.array(ModelRoleSchema) }),
+  z.object({ type: z.literal("model-roles/set.success"), data: ModelRoleSchema.nullable() }),
+  z.object({ type: z.literal("model-roles/delete.success") }),
   // Stats
   z.object({ type: z.literal("stats/list.success"), activeRuns: z.number() }),
   // Errors

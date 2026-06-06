@@ -113,6 +113,48 @@ export const CORE_TOOLS: ToolDefinition[] = [
       required: ["title", "content", "workspaceId"],
     },
   },
+  {
+    name: "delegate_task",
+    description: "Delegate a complex task to a specialized sub-agent. Use claude-code or codex for coding tasks that require file editing, multi-file reasoning, or terminal access. Use researcher/extractor/drafter/navigator for browser-based tasks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskDescription: { type: "string", description: "Clear description of the task to delegate" },
+        targetAgentRole: { type: "string", enum: ["claude-code", "codex", "researcher", "extractor", "drafter", "navigator", "general"], description: "The sub-agent role to use" },
+        context: { type: "string", description: "Optional additional context for the sub-agent" },
+        workspaceId: { type: "string", description: "The workspace context for the task" },
+        maxSteps: { type: "number", description: "Maximum steps for in-process sub-agents (ignored for CLI sub-agents)" },
+      },
+      required: ["taskDescription", "targetAgentRole", "workspaceId"],
+    },
+  },
+  {
+    name: "memory_recall",
+    description: "Recall relevant memories from the knowledge base. Use this to retrieve previously stored facts, decisions, and context that may help with the current task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Natural language query to search for relevant memories" },
+        workspaceId: { type: "string", description: "The workspace to search in" },
+        limit: { type: "number", description: "Maximum number of memories to return (default 5)" },
+      },
+      required: ["query", "workspaceId"],
+    },
+  },
+  {
+    name: "memory_store",
+    description: "Store an important fact, decision, or piece of context as a memory for future recall. Use this to persist key findings from the current task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Short identifier for the memory (e.g., 'api-endpoint-auth')" },
+        content: { type: "string", description: "The content to remember" },
+        workspaceId: { type: "string", description: "The workspace to store the memory in" },
+        tags: { type: "array", items: { type: "string" }, description: "Optional tags for categorization" },
+      },
+      required: ["key", "content", "workspaceId"],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -137,6 +179,9 @@ export interface ToolExecutor {
   ingest_file(input: { filePath: string; workspaceId: string; sourceUrl?: string; profileId?: string }): Promise<unknown>;
   rag_retrieve(input: { query: string; workspaceId: string; limit?: number }): Promise<unknown>;
   write_note(input: { title: string; content: string; workspaceId: string }): Promise<unknown>;
+  delegate_task(input: { taskDescription: string; targetAgentRole: string; context?: string; workspaceId: string; maxSteps?: number }): Promise<unknown>;
+  memory_recall(input: { query: string; workspaceId: string; limit?: number }): Promise<unknown>;
+  memory_store(input: { key: string; content: string; workspaceId: string; tags?: string[] }): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +359,12 @@ Always cite your sources when answering from retrieved documents.`;
         return this.executor.rag_retrieve(input as { query: string; workspaceId: string; limit?: number });
       case "write_note":
         return this.executor.write_note(input as { title: string; content: string; workspaceId: string });
+      case "delegate_task":
+        return this.executor.delegate_task(input as { taskDescription: string; targetAgentRole: string; context?: string; workspaceId: string; maxSteps?: number });
+      case "memory_recall":
+        return this.executor.memory_recall(input as { query: string; workspaceId: string; limit?: number });
+      case "memory_store":
+        return this.executor.memory_store(input as { key: string; content: string; workspaceId: string; tags?: string[] });
       default:
         throw new Error(`Unknown tool: ${name}`);
     }

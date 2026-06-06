@@ -158,4 +158,33 @@ describe("CarbonDatabase", () => {
       // No assertion failure means it worked
     });
   });
+
+  describe("documents", () => {
+    it("lists workspace documents with file metadata", async () => {
+      const wsId = "ws-docs-test";
+      await db.createWorkspace({ id: wsId, name: "Docs Test", vaultDir: "/tmp/v-docs" });
+      await db.createDataSource({
+        id: "ds-doc-1",
+        workspaceId: wsId,
+        type: "file",
+        name: "Draft.md",
+        path: "/tmp/v-docs/Draft.md",
+        mimeType: "text/plain",
+        sizeBytes: 42,
+      });
+      await db.createDocument({
+        id: "doc-1",
+        workspaceId: wsId,
+        dataSourceId: "ds-doc-1",
+        title: "Draft",
+        content: "# Draft\n\nHello",
+      });
+
+      const docs = await (db as any).listDocuments(wsId);
+      expect(docs).toHaveLength(1);
+      expect(docs[0].file_path).toBe("/tmp/v-docs/Draft.md");
+      expect(docs[0].title).toBe("Draft");
+      expect(docs[0].workspace_id).toBe(wsId);
+    });
+  });
 });

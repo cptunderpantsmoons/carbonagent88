@@ -1,5 +1,6 @@
 import {
   Toast,
+  appState,
   createButton,
   createCard,
   createEmptyState,
@@ -67,6 +68,9 @@ export function renderWatchers(container: HTMLElement): void {
   void Promise.all([loadWorkspaces(), loadProfiles()]).then(([workspaces, profiles]) => {
     populateSelect(workspaceSelect, workspaces, (workspace) => workspace.name, "Select workspace...");
     populateSelect(profileSelect, profiles, (profile) => profile.name, "Select profile (optional)...");
+    if (appState.currentWorkspaceId) {
+      workspaceSelect.value = appState.currentWorkspaceId;
+    }
   });
 
   saveBtn.addEventListener("click", async () => {
@@ -122,36 +126,39 @@ async function renderWatcherList(): Promise<void> {
     for (const watcher of watchers as any[]) {
       const card = document.createElement("div");
       card.className = "watcher-card";
-      const enabled = Boolean(watcher.enabled);
-      const statusLabel = watcher.last_run_status === "success"
+      const enabled = Boolean(watcher.enabled ?? watcher.enabled === 1);
+      const statusLabel = watcher.lastRunStatus === "success" || watcher.last_run_status === "success"
         ? "Healthy"
-        : watcher.last_run_status === "failed"
+        : watcher.lastRunStatus === "failed" || watcher.last_run_status === "failed"
           ? "Failed"
           : !enabled
             ? "Paused"
-            : watcher.last_run_at
+            : watcher.lastRunAt || watcher.last_run_at
               ? "Running"
               : "Never Run";
-      const statusClass = watcher.last_run_status === "success"
+      const statusClass = watcher.lastRunStatus === "success" || watcher.last_run_status === "success"
         ? "active"
-        : watcher.last_run_status === "failed"
+        : watcher.lastRunStatus === "failed" || watcher.last_run_status === "failed"
           ? "failed"
           : !enabled
             ? "expired"
             : "unknown";
+      const watcherName = String(watcher.name ?? watcher.prompt ?? "Watcher");
+      const cronExpression = String(watcher.cronExpression ?? watcher.cron_expression ?? "");
+      const lastRunAt = watcher.lastRunAt ?? watcher.last_run_at;
 
       card.innerHTML = `
         <div class="watcher-card-header">
           <div class="watcher-card-name-row">
-            <span class="watcher-card-name">${escapeHtml(String(watcher.name))}</span>
+            <span class="watcher-card-name">${escapeHtml(watcherName)}</span>
             <span class="badge badge-${statusClass} badge-dot">${statusLabel}</span>
           </div>
           <input type="checkbox" class="watcher-toggle" ${enabled ? "checked" : ""}>
         </div>
         <div class="watcher-card-prompt">${escapeHtml(String(watcher.prompt))}</div>
         <div class="watcher-card-meta">
-          <span>Schedule: ${escapeHtml(String(watcher.cron_expression))}</span>
-          <span>${watcher.last_run_at ? `Last: ${new Date(watcher.last_run_at).toLocaleString()}` : "Never run"}</span>
+          <span>Schedule: ${escapeHtml(cronExpression)}</span>
+          <span>${lastRunAt ? `Last: ${new Date(String(lastRunAt)).toLocaleString()}` : "Never run"}</span>
         </div>
         <div class="watcher-card-actions">
           <button class="btn btn-ghost btn-sm" data-action="run">Run Now</button>
@@ -170,7 +177,7 @@ async function renderWatcherList(): Promise<void> {
       });
 
       card.querySelector('[data-action="run"]')?.addEventListener("click", async () => {
-        Toast.show(`Triggering ${watcher.name}...`, "info");
+        Toast.show(`Triggering ${watcherName}...`, "info");
         try {
           await window.carbonAPI.invoke({ type: "watcher/run", id: watcher.id } as any);
           Toast.show("Watcher triggered", "success");
@@ -181,10 +188,10 @@ async function renderWatcherList(): Promise<void> {
 
       card.querySelector('[data-action="logs"]')?.addEventListener("click", () => {
         setInspectorContent(`
-          <div class="inspector-section"><div class="inspector-section-title">Watcher: ${escapeHtml(String(watcher.name))}</div>
+          <div class="inspector-section"><div class="inspector-section-title">Watcher: ${escapeHtml(watcherName)}</div>
             <div class="inspector-row"><span class="label">Status</span><span class="value">${statusLabel}</span></div>
-            <div class="inspector-row"><span class="label">Schedule</span><span class="value">${escapeHtml(String(watcher.cron_expression))}</span></div>
-            <div class="inspector-row"><span class="label">Last Run</span><span class="value">${watcher.last_run_at ? new Date(watcher.last_run_at).toLocaleString() : "Never"}</span></div>
+            <div class="inspector-row"><span class="label">Schedule</span><span class="value">${escapeHtml(cronExpression)}</span></div>
+            <div class="inspector-row"><span class="label">Last Run</span><span class="value">${lastRunAt ? new Date(String(lastRunAt)).toLocaleString() : "Never"}</span></div>
           </div>
         `);
       });

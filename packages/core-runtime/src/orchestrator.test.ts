@@ -62,8 +62,10 @@ describe("SupervisorOrchestrator", () => {
       for (const [role, def] of Object.entries(SUB_AGENT_REGISTRY)) {
         expect(def.role).toBe(role);
         expect(def.description).toBeDefined();
-        expect(def.maxSteps).toBeGreaterThan(0);
-        expect(def.systemPrompt).toBeDefined();
+        if (!def.cli) {
+          expect(def.maxSteps).toBeGreaterThan(0);
+          expect(def.systemPrompt).toBeDefined();
+        }
       }
     });
   });

@@ -41,7 +41,8 @@ function renderTreeNode(node: AXTreeNode, container: HTMLElement, depth = 0) {
     e.stopPropagation();
     const role = node.role;
     const name = node.name ?? "";
-    const selector = name ? `role=${role}[name="${name}"]` : `role=${role}`;
+    const escapedName = name.replace(/"/g, '\\"');
+    const selector = name ? `role=${role}[name="${escapedName}"]` : `role=${role}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(selector).then(() => Toast.show("Copied selector: " + selector, "success", 2000)).catch(() => Toast.show("Copy failed", "error", 2000));
     } else {

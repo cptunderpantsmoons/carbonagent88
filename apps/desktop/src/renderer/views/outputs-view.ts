@@ -1,5 +1,6 @@
 import {
   Toast,
+  appState,
   createButton,
   createEmptyState,
   createSelect,
@@ -52,6 +53,9 @@ export function renderOutputs(container: HTMLElement): void {
 
   void loadWorkspaces().then((workspaces) => {
     populateSelect(workspaceSelect, workspaces, (workspace) => workspace.name, "Select workspace...");
+    if (appState.currentWorkspaceId) {
+      workspaceSelect.value = appState.currentWorkspaceId;
+    }
     void renderOutputsGrid(grid, workspaceSelect.value || undefined, activeFilter);
   });
 
@@ -91,8 +95,8 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
           <span class="badge badge-${fmtClass}">${fmt}</span>
         </div>
         <div class="output-shelf-meta">
-          <span>${new Date(doc.created_at).toLocaleDateString()}</span>
-          <span>${escapeHtml(String(doc.file_path || ""))}</span>
+          <span>${new Date(String(doc.createdAt ?? doc.created_at)).toLocaleDateString()}</span>
+          <span>${escapeHtml(String(doc.filePath ?? doc.file_path ?? ""))}</span>
         </div>
         <div class="output-shelf-preview">${escapeHtml(String((doc.preview || doc.content || "").slice(0, 120)))}</div>
         <div class="output-shelf-actions">
@@ -102,10 +106,20 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
         </div>
       `;
 
-      card.querySelector('[data-action="open"]')?.addEventListener("click", () => Toast.show("Opening document...", "info"));
-      card.querySelector('[data-action="reveal"]')?.addEventListener("click", () => Toast.show("Revealing in Finder...", "info"));
+      card.querySelector('[data-action="open"]')?.addEventListener("click", async () => {
+        const result = await window.carbonAPI.invoke({ type: "document/open", filePath: String(doc.filePath ?? doc.file_path ?? "") } as any) as any;
+        if (result.type === "error") {
+          Toast.show(String(result.error), "error");
+        }
+      });
+      card.querySelector('[data-action="reveal"]')?.addEventListener("click", async () => {
+        const result = await window.carbonAPI.invoke({ type: "document/reveal", filePath: String(doc.filePath ?? doc.file_path ?? "") } as any) as any;
+        if (result.type === "error") {
+          Toast.show(String(result.error), "error");
+        }
+      });
       card.querySelector('[data-action="copy"]')?.addEventListener("click", () => {
-        void navigator.clipboard.writeText(String(doc.file_path || "")).then(() => Toast.show("Path copied", "success"));
+        void navigator.clipboard.writeText(String(doc.filePath ?? doc.file_path ?? "")).then(() => Toast.show("Path copied", "success"));
       });
       grid.appendChild(card);
     }

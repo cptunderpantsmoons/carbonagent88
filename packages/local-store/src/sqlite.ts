@@ -90,6 +90,7 @@ function initTables(): void {
     );
     CREATE TABLE IF NOT EXISTS browser_profiles (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, profile_dir TEXT NOT NULL,
+      cdp_url TEXT, cdp_fingerprint TEXT,
       target_domains TEXT NOT NULL DEFAULT '[]',
       status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('active','expired','unknown','locked')),
       last_checked_at TEXT,
@@ -148,18 +149,63 @@ function initTables(): void {
       started_at TEXT NOT NULL, completed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS watchers (
-      id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      cron_expression TEXT NOT NULL, prompt TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL DEFAULT '',
+      cron_expression TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
       profile_id TEXT REFERENCES browser_profiles(id),
       last_run_at TEXT, last_run_status TEXT CHECK(last_run_status IN ('success','failed','running','pending')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+  ensureBrowserProfileColumns();
+  ensureWatcherColumns();
+}
+
+function ensureBrowserProfileColumns(): void {
+  if (!dbInstance) return;
+  const columns = getRows(dbInstance, "PRAGMA table_info(browser_profiles)");
+  const names = new Set(columns.map((column) => String(column.name)));
+  if (!names.has("cdp_url")) {
+    dbInstance.exec("ALTER TABLE browser_profiles ADD COLUMN cdp_url TEXT");
+  }
+  if (!names.has("cdp_fingerprint")) {
+    dbInstance.exec("ALTER TABLE browser_profiles ADD COLUMN cdp_fingerprint TEXT");
+  }
+}
+
+function ensureWatcherColumns(): void {
+  if (!dbInstance) return;
+  const columns = getRows(dbInstance, "PRAGMA table_info(watchers)");
+  const names = new Set(columns.map((column) => String(column.name)));
+  if (!names.has("name")) {
+    dbInstance.exec("ALTER TABLE watchers ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+  }
+  if (!names.has("profile_id")) {
+    dbInstance.exec("ALTER TABLE watchers ADD COLUMN profile_id TEXT REFERENCES browser_profiles(id)");
+  }
 }
 
 // --- helpers ---
 interface RowObj {
   [key: string]: unknown;
+}
+
+function inferDocumentFormat(filePath: string, mimeType?: string | null): "markdown" | "docx" | "pdf" | "unknown" {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".md" || ext === ".markdown") return "markdown";
+  if (ext === ".docx") return "docx";
+  if (ext === ".pdf") return "pdf";
+  if (mimeType === "text/markdown" || mimeType === "text/plain") return "markdown";
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
+  if (mimeType === "application/pdf") return "pdf";
+  return "unknown";
+}
+
+function buildPreview(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
 export function getRow(db: Database, sql: string, params: unknown[] = []): RowObj | undefined {
@@ -257,9 +303,10 @@ export class CarbonDatabase {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    for (const k of ["type", "name", "baseUrl", "model"] as const) {
-      if (p[k] !== undefined) { fields.push(`${k} = ?`); vals.push(p[k]); }
-    }
+    if (p.type !== undefined) { fields.push("type = ?"); vals.push(p.type); }
+    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
+    if (p.baseUrl !== undefined) { fields.push("base_url = ?"); vals.push(p.baseUrl); }
+    if (p.model !== undefined) { fields.push("model = ?"); vals.push(p.model); }
     if (p.apiKey !== undefined) { fields.push("api_key = ?"); vals.push(encrypt(p.apiKey)); }
     vals.push(p.id);
     runStmt(db, `UPDATE ai_providers SET ${fields.join(", ")} WHERE id = ?`, vals);
@@ -280,19 +327,23 @@ export class CarbonDatabase {
     return getRows(db, "SELECT * FROM browser_profiles ORDER BY created_at DESC");
   }
 
-  async createProfile(p: { id: string; name: string; description?: string; profileDir: string; targetDomains: string[] }) {
+  async createProfile(p: { id: string; name: string; description?: string; profileDir?: string; cdpUrl?: string; cdpFingerprint?: string; targetDomains: string[] }) {
     const db = await ensureDb();
-    runStmt(db, "INSERT INTO browser_profiles (id, name, description, profile_dir, target_domains) VALUES (?, ?, ?, ?, ?)",
-      [p.id, p.name, p.description ?? null, p.profileDir, JSON.stringify(p.targetDomains)]);
+    runStmt(db, "INSERT INTO browser_profiles (id, name, description, profile_dir, cdp_url, cdp_fingerprint, target_domains) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [p.id, p.name, p.description ?? null, p.profileDir ?? null, p.cdpUrl ?? null, p.cdpFingerprint ?? null, JSON.stringify(p.targetDomains)]);
   }
 
-  async updateProfile(p: { id: string; name?: string; description?: string; profileDir?: string; targetDomains?: string[]; status?: string; lastCheckedAt?: string }) {
+  async updateProfile(p: { id: string; name?: string; description?: string; profileDir?: string; cdpUrl?: string; cdpFingerprint?: string; targetDomains?: string[]; status?: string; lastCheckedAt?: string }) {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    for (const k of ["name", "description", "profileDir", "status", "lastCheckedAt"] as const) {
-      if (p[k] !== undefined) { fields.push(`${k} = ?`); vals.push(p[k]); }
-    }
+    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
+    if (p.description !== undefined) { fields.push("description = ?"); vals.push(p.description); }
+    if (p.profileDir !== undefined) { fields.push("profile_dir = ?"); vals.push(p.profileDir); }
+    if (p.cdpUrl !== undefined) { fields.push("cdp_url = ?"); vals.push(p.cdpUrl); }
+    if (p.cdpFingerprint !== undefined) { fields.push("cdp_fingerprint = ?"); vals.push(p.cdpFingerprint); }
+    if (p.status !== undefined) { fields.push("status = ?"); vals.push(p.status); }
+    if (p.lastCheckedAt !== undefined) { fields.push("last_checked_at = ?"); vals.push(p.lastCheckedAt); }
     if (p.targetDomains !== undefined) { fields.push("target_domains = ?"); vals.push(JSON.stringify(p.targetDomains)); }
     vals.push(p.id);
     runStmt(db, `UPDATE browser_profiles SET ${fields.join(", ")} WHERE id = ?`, vals);
@@ -343,6 +394,12 @@ export class CarbonDatabase {
   async listRuns(conversationId: string) {
     const db = await ensureDb();
     return getRows(db, "SELECT * FROM runs WHERE conversation_id = ? ORDER BY created_at DESC", [conversationId]);
+  }
+
+  async countRunningRuns() {
+    const db = await ensureDb();
+    const row = getRow(db, "SELECT COUNT(*) AS count FROM runs WHERE status = 'running'");
+    return Number(row?.count ?? 0);
   }
 
   async createRun(p: { id: string; conversationId: string; workspaceId: string; providerId: string | null; jsonlLogPath: string }) {
@@ -420,6 +477,42 @@ export class CarbonDatabase {
     );
   }
 
+  async listDocuments(workspaceId: string) {
+    const db = await ensureDb();
+    const rows = getRows(db,
+      `SELECT
+         d.id,
+         d.workspace_id,
+         d.data_source_id,
+         d.title,
+         d.content,
+         d.chunk_count,
+         d.created_at,
+         d.updated_at,
+         ds.path AS file_path,
+         ds.mime_type,
+         ds.size_bytes,
+         ds.source_url,
+         ds.profile_id
+       FROM documents d
+       JOIN data_sources ds ON ds.id = d.data_source_id
+       WHERE d.workspace_id = ?
+       ORDER BY d.created_at DESC`,
+      [workspaceId]
+    );
+
+    return rows.map((row) => {
+      const filePath = String(row.file_path ?? "");
+      const mimeType = row.mime_type ? String(row.mime_type) : null;
+      const content = String(row.content ?? "");
+      return {
+        ...row,
+        format: inferDocumentFormat(filePath, mimeType),
+        preview: buildPreview(content),
+      };
+    });
+  }
+
   async updateDocumentChunkCount(documentId: string, chunkCount: number) {
     const db = await ensureDb();
     runStmt(db,
@@ -457,16 +550,33 @@ export class CarbonDatabase {
     return getRows(db, "SELECT * FROM watchers ORDER BY created_at DESC");
   }
 
-  async createWatcher(p: { id: string; workspaceId: string; cronExpression: string; prompt: string; enabled: boolean }) {
+  async listSkills(workspaceId: string) {
     const db = await ensureDb();
-    runStmt(db, "INSERT INTO watchers (id, workspace_id, cron_expression, prompt, enabled) VALUES (?, ?, ?, ?, ?)",
-      [p.id, p.workspaceId, p.cronExpression, p.prompt, p.enabled ? 1 : 0]);
+    return getRows(db, "SELECT * FROM skills WHERE workspace_id = ? ORDER BY pinned DESC, success_count DESC, created_at DESC", [workspaceId]);
   }
 
-  async updateWatcher(p: { id: string; cronExpression?: string; prompt?: string; enabled?: boolean; lastRunAt?: string; lastRunStatus?: string }) {
+  async toggleSkillPin(id: string, pinned: boolean) {
+    const db = await ensureDb();
+    runStmt(db, "UPDATE skills SET pinned = ?, updated_at = datetime('now') WHERE id = ?", [pinned ? 1 : 0, id]);
+  }
+
+  async deleteSkill(id: string) {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM skills WHERE id = ?", [id]);
+  }
+
+  async createWatcher(p: { id: string; workspaceId: string; name: string; cronExpression: string; prompt: string; enabled: boolean; profileId?: string | null }) {
+    const db = await ensureDb();
+    runStmt(db, "INSERT INTO watchers (id, workspace_id, name, cron_expression, prompt, enabled, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [p.id, p.workspaceId, p.name, p.cronExpression, p.prompt, p.enabled ? 1 : 0, p.profileId ?? null]);
+  }
+
+  async updateWatcher(p: { id: string; name?: string; profileId?: string | null; cronExpression?: string; prompt?: string; enabled?: boolean; lastRunAt?: string; lastRunStatus?: string }) {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
+    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
+    if (p.profileId !== undefined) { fields.push("profile_id = ?"); vals.push(p.profileId); }
     if (p.cronExpression !== undefined) { fields.push("cron_expression = ?"); vals.push(p.cronExpression); }
     if (p.prompt !== undefined) { fields.push("prompt = ?"); vals.push(p.prompt); }
     if (p.enabled !== undefined) { fields.push("enabled = ?"); vals.push(p.enabled ? 1 : 0); }

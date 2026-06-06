@@ -3,12 +3,16 @@
  */
 
 import { AgentRuntime, type ToolExecutor } from "@carbon-agent/core-runtime";
-import { CarbonDatabase, createRunLog, getVaultDir } from "@carbon-agent/local-store";
+import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole } from "@carbon-agent/local-store";
 import { parseFile, chunkText, storeChunks, searchChunks, getEmbeddingProvider } from "@carbon-agent/ingestion";
 import { generateDocument } from "./document-generator.js";
 import { stealthOpen, stealthScrape, stealthDownload } from "@carbon-agent/cloak-bridge";
 import fs from "node:fs";
 import path from "node:path";
+import { emitAgentTopology, emitVaultChange } from "./desktop-events.js";
+import { recordGeneratedDocument } from "./document-records.js";
+import { spawnCliSubAgent, type CliType } from "./cli-subagent.js";
+import type { DesktopTopologyEdge, DesktopTopologyNode } from "./desktop-events.js";
 
 export interface RunAgentInput {
   db: CarbonDatabase;
@@ -18,6 +22,8 @@ export interface RunAgentInput {
   message: string;
   maxSteps?: number;
   runId?: string;
+  defaultProfileId?: string;
+  onRuntime?: (runtime: { cancel(): void }) => void;
 }
 
 export interface RunAgentResult {
@@ -31,10 +37,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const { db, workspaceId, conversationId, providerId, message, maxSteps = 50 } = input;
   const runId = input.runId ?? crypto.randomUUID();
 
-  const logPath = createRunLog(runId);
-  await db.createRun({ id: runId, conversationId, workspaceId, providerId, jsonlLogPath: logPath });
+  let logPath: string;
+  const existingRun = await db.getRun(runId);
+  if (existingRun) {
+    logPath = String(existingRun.jsonl_log_path);
+    if (!fs.existsSync(logPath)) {
+      logPath = createRunLog(runId);
+    }
+  } else {
+    logPath = createRunLog(runId);
+    await db.createRun({ id: runId, conversationId, workspaceId, providerId, jsonlLogPath: logPath });
+  }
 
-  const providerRow = await db.getProviderWithKey(providerId);
+  // Look up role-specific provider (assistant role for main agent runs)
+  const assistantRole = await dbGetModelRole(workspaceId, "assistant");
+  const effectiveProviderId = assistantRole?.provider_id ?? providerId;
+
+  const providerRow = await db.getProviderWithKey(effectiveProviderId);
   if (!providerRow) throw new Error("Provider not found");
 
   const providerConfig = {
@@ -51,26 +70,59 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   await db.updateRunStatus(runId, "running", { model: providerConfig.model, startedAt: new Date().toISOString() });
   await db.addMessage({ id: crypto.randomUUID(), conversationId, role: "user", content: message });
 
+  const topologyNodes = new Map<string, DesktopTopologyNode>([
+    ["supervisor", { id: "supervisor", label: "Supervisor", status: "running", x: 120, y: 80 }],
+  ]);
+  const topologyEdges: DesktopTopologyEdge[] = [];
+  let lastTopologyNodeId = "supervisor";
+
+  const emitTopology = (status: DesktopTopologyNode["status"]): void => {
+    const supervisor = topologyNodes.get("supervisor");
+    if (supervisor) {
+      supervisor.status = status;
+      topologyNodes.set("supervisor", supervisor);
+    }
+    emitAgentTopology({
+      runId,
+      nodes: Array.from(topologyNodes.values()),
+      edges: topologyEdges,
+    });
+  };
+
+  emitTopology("running");
+
+  const abortController = new AbortController();
+
   const executor: ToolExecutor = {
     stealth_interact: async () => ({ success: true } as unknown),
     stealth_screenshot: async () => ({ success: true } as unknown),
     stealth_evaluate: async () => ({ success: true } as unknown),
     stealth_axtree: async () => ({ success: true } as unknown),
     graph_query: async () => ({ success: true, nodes: [], edges: [] } as unknown),
-    generate_document: async (payload: Record<string, unknown>) => generateDocument({
-      workspaceId: payload.workspaceId as string,
-      title: (payload.title as string) ?? "Untitled",
-      content: payload.content as string,
-      format: payload.format as "markdown" | "docx" | "pdf",
-    }) as unknown,
+    generate_document: async (payload: Record<string, unknown>) => {
+      const result = await generateDocument({
+        workspaceId: payload.workspaceId as string,
+        title: (payload.title as string) ?? "Untitled",
+        content: payload.content as string,
+        format: payload.format as "markdown" | "docx" | "pdf",
+      });
+      await recordGeneratedDocument(db, {
+        workspaceId: payload.workspaceId as string,
+        title: (payload.title as string) ?? "Untitled",
+        content: payload.content as string,
+        filePath: result.filePath,
+        format: payload.format as "markdown" | "docx" | "pdf",
+      });
+      return result as unknown;
+    },
     recall_skill: async () => ({ success: true } as unknown),
     store_skill: async () => ({ success: true } as unknown),
     vault_read: async () => ({ success: true } as unknown),
     vault_write: async () => ({ success: true } as unknown),
     vault_link: async () => ({ success: true } as unknown),
-    stealth_open: async (payload: Record<string, unknown>) => stealthOpen({ profileId: payload.profileId as string, profileDir: "", url: payload.url as string }),
-    stealth_scrape: async (payload: Record<string, unknown>) => stealthScrape({ profileId: payload.profileId as string, url: payload.url as string }),
-    stealth_download: async (payload: Record<string, unknown>) => stealthDownload({ profileId: payload.profileId as string, url: payload.url as string, filename: payload.filename as string }),
+    stealth_open: async (payload: Record<string, unknown>) => stealthOpen({ profileId: (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "", url: payload.url as string }),
+    stealth_scrape: async (payload: Record<string, unknown>) => stealthScrape({ profileId: (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "", url: payload.url as string }),
+    stealth_download: async (payload: Record<string, unknown>) => stealthDownload({ profileId: (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "", url: payload.url as string, filename: payload.filename as string }),
     ingest_file: async (payload: Record<string, unknown>) => {
       const filePath = payload.filePath as string;
       const parsed = parseFile(filePath, { sourceUrl: payload.sourceUrl as string | undefined, profileId: payload.profileId as string | undefined });
@@ -99,15 +151,189 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       const vaultDir = getVaultDir(payload.workspaceId as string);
       if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
       const notePath = path.join(vaultDir, `${(payload.title as string).replace(/[^a-zA-Z0-9]/g, "_")}.md`);
-      fs.writeFileSync(notePath, `# ${payload.title}\n\n${payload.content}`);
+      const noteContent = `# ${payload.title}\n\n${payload.content}`;
+      fs.writeFileSync(notePath, noteContent);
+      emitVaultChange({ workspaceId: payload.workspaceId as string, filePath: path.relative(vaultDir, notePath).split(path.sep).join("/"), content: noteContent });
+
+      // Auto-store memory for semantic recall
+      try {
+        const memId = crypto.randomUUID();
+        await dbStoreMemory({
+          id: memId,
+          workspaceId: payload.workspaceId as string,
+          key: payload.title as string,
+          content: (payload.content as string).slice(0, 500),
+          tags: ["vault-note"],
+          source: "vault-write",
+          importance: 0.6,
+        });
+      } catch { /* memory extraction is best-effort */ }
+
       return { success: true, filePath: notePath };
+    },
+    delegate_task: async (payload: Record<string, unknown>) => {
+      const role = payload.targetAgentRole as string;
+      const task = payload.taskDescription as string;
+      const context = payload.context as string | undefined;
+      const wsId = payload.workspaceId as string;
+
+      // CLI sub-agents
+      if (role === "claude-code" || role === "codex") {
+        const workspaceDir = getVaultDir(wsId);
+        if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir, { recursive: true });
+
+        const result = await spawnCliSubAgent({
+          cli: role as CliType,
+          task,
+          context,
+          workspaceDir,
+          runId,
+          logPath,
+          signal: abortController.signal,
+        });
+
+        return {
+          success: result.success,
+          subAgentRole: role,
+          result: result.result,
+          stepsTaken: 0,
+          toolCalls: [],
+          error: result.error,
+          cliNotFound: result.cliNotFound,
+          installCommand: result.installCommand,
+        };
+      }
+
+      // In-process sub-agent: create a stripped executor (no delegate_task to prevent recursion)
+      const subExecutor: ToolExecutor = {
+        stealth_open: executor.stealth_open,
+        stealth_scrape: executor.stealth_scrape,
+        stealth_download: executor.stealth_download,
+        stealth_interact: executor.stealth_interact,
+        stealth_screenshot: executor.stealth_screenshot,
+        stealth_evaluate: executor.stealth_evaluate,
+        stealth_axtree: executor.stealth_axtree,
+        ingest_file: executor.ingest_file,
+        rag_retrieve: executor.rag_retrieve,
+        graph_query: executor.graph_query,
+        generate_document: executor.generate_document,
+        write_note: executor.write_note,
+        recall_skill: executor.recall_skill,
+        store_skill: executor.store_skill,
+        vault_read: executor.vault_read,
+        vault_write: executor.vault_write,
+        vault_link: executor.vault_link,
+        memory_recall: async () => ({ success: false, memories: [] }),
+        memory_store: async () => ({ success: false }),
+        delegate_task: async () => ({ success: false, error: "Nested delegation is not allowed" }),
+      };
+
+      const subRunId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const subMaxSteps = (payload.maxSteps as number) ?? 20;
+      const systemPrompt = `You are a ${role} sub-agent. Complete the assigned task using available tools. Be thorough and return clear results.\n\nTask from supervisor: ${task}\n\nAdditional context: ${context ?? "None"}`;
+
+      // Look up role-specific provider for the sub-agent
+      const roleToModelRole: Record<string, "coder" | "knowledge-graph" | "meeting-notes"> = {
+        coder: "coder",
+        researcher: "knowledge-graph",
+        extractor: "knowledge-graph",
+        drafter: "meeting-notes",
+      };
+      const mappedRole = roleToModelRole[role];
+      let subProviderConfig = providerConfig;
+      if (mappedRole) {
+        const roleProvider = await dbGetModelRole(wsId, mappedRole);
+        if (roleProvider?.provider_id) {
+          const roleProviderRow = await db.getProviderWithKey(roleProvider.provider_id);
+          if (roleProviderRow) {
+            subProviderConfig = {
+              id: roleProviderRow.id as string,
+              type: roleProviderRow.type as "anthropic" | "openai" | "custom-openai",
+              name: roleProviderRow.name as string,
+              apiKey: roleProviderRow.api_key as string,
+              baseUrl: roleProviderRow.base_url as string | undefined,
+              model: roleProviderRow.model as string,
+              createdAt: roleProviderRow.created_at as string,
+              updatedAt: roleProviderRow.updated_at as string,
+            };
+          }
+        }
+      }
+
+      const subRuntime = new AgentRuntime(
+        { providerConfig: subProviderConfig, runId: subRunId, workspaceId: wsId, conversationId, maxSteps: subMaxSteps, systemPrompt },
+        subExecutor,
+      );
+
+      const toolCalls: { name: string; input: Record<string, unknown>; output?: unknown }[] = [];
+      let stepsTaken = 0;
+      let finalResult = "";
+
+      const fullPrompt = context ? `Task: ${task}\n\nContext:\n${context}` : task;
+
+      for await (const event of subRuntime.run(fullPrompt)) {
+        if (event.type === "tool" && event.step?.toolCalls) {
+          stepsTaken = event.step.step;
+          for (const tc of event.step.toolCalls) {
+            toolCalls.push({ name: tc.name, input: tc.input, output: tc.output });
+          }
+        } else if (event.type === "text" && event.content) {
+          finalResult = event.content;
+        }
+      }
+
+      return {
+        success: true,
+        subAgentRole: role,
+        result: finalResult || "(no textual result)",
+        stepsTaken,
+        toolCalls,
+      };
+    },
+    memory_recall: async (payload: Record<string, unknown>) => {
+      const memories = await dbRecallMemories(
+        payload.workspaceId as string,
+        payload.query as string,
+        (payload.limit as number) ?? 5,
+      );
+      return {
+        success: true,
+        memories: memories.map((m) => ({
+          id: m.id,
+          key: m.key,
+          content: m.content,
+          tags: JSON.parse(m.tags_json) as string[],
+          source: m.source,
+          importance: m.importance,
+        })),
+      };
+    },
+    memory_store: async (payload: Record<string, unknown>) => {
+      const id = crypto.randomUUID();
+      await dbStoreMemory({
+        id,
+        workspaceId: payload.workspaceId as string,
+        key: payload.key as string,
+        content: payload.content as string,
+        tags: payload.tags as string[] | undefined,
+        source: "agent",
+        importance: 0.7,
+      });
+      return { success: true, id, key: payload.key };
     },
   };
 
   const runtime = new AgentRuntime({ providerConfig, runId, workspaceId, conversationId, maxSteps }, executor);
+  input.onRuntime?.({
+    cancel() {
+      abortController.abort();
+      runtime.cancel();
+    },
+  });
   let fullResponse = "";
   let runStatus: "completed" | "failed" | "cancelled" = "completed";
   let runError: string | undefined;
+  const runToolCalls: { name: string; input: Record<string, unknown>; output?: unknown }[] = [];
 
   try {
     for await (const event of runtime.run(message)) {
@@ -116,6 +342,27 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       } else if (event.type === "error") {
         fullResponse += `\n[Error: ${event.error}]`;
         runError = event.error;
+      } else if (event.type === "tool" && event.step?.toolCalls) {
+        let stepIndex = 0;
+        for (const toolCall of event.step.toolCalls) {
+          runToolCalls.push({ name: toolCall.name, input: toolCall.input as Record<string, unknown>, output: toolCall.output });
+          const nodeId = `${runId}:${event.step.step}:${stepIndex}`;
+          const status: DesktopTopologyNode["status"] = toolCall.error ? "failed" : "completed";
+          const label = toolCall.name === "delegate_task"
+            ? `Sub-Agent: ${String((toolCall.input as Record<string, unknown>)?.targetAgentRole ?? "unknown")}`
+            : toolCall.name;
+          topologyNodes.set(nodeId, {
+            id: nodeId,
+            label,
+            status,
+            x: 320 + (event.step.step * 180),
+            y: 80 + (stepIndex * 110),
+          });
+          topologyEdges.push({ from: lastTopologyNodeId, to: nodeId });
+          lastTopologyNodeId = nodeId;
+          stepIndex += 1;
+        }
+        emitTopology("running");
       }
     }
   } catch (err: unknown) {
@@ -132,6 +379,32 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
     await db.updateRunStatus(runId, runStatus, { completedAt: new Date().toISOString() });
     await db.addMessage({ id: crypto.randomUUID(), conversationId, role: "assistant", content: fullResponse });
+    emitTopology(runStatus === "completed" ? "completed" : "failed");
+
+    // Auto-skill creation: if run succeeded with 3+ tool calls, learn a skill
+    if (runStatus === "completed" && runToolCalls.length >= 3 && !runError) {
+      try {
+        const trigger = message.slice(0, 200);
+        const skillName = `Auto: ${message.slice(0, 60)}`;
+        const toolSequence = runToolCalls.map((tc) => ({
+          toolName: tc.name,
+          input: tc.input,
+          notes: tc.output ? "completed" : undefined,
+        }));
+        const skillId = crypto.randomUUID();
+        const triggerEmbedding = hashEmbed(trigger);
+        await dbStoreSkill({
+          id: skillId,
+          workspaceId,
+          trigger,
+          triggerEmbedding,
+          name: skillName,
+          description: `Automatically learned from successful run (${runToolCalls.length} steps)`,
+          toolSequence,
+        });
+      } catch { /* auto-skill is best-effort */ }
+    }
+
     try {
       const logEntry = JSON.stringify({ timestamp: new Date().toISOString(), runId, status: runStatus, error: runError ?? null }) + "\n";
       fs.appendFileSync(logPath, logEntry);

@@ -19,6 +19,7 @@ export const appState = {
   currentConversationId: null as string | null,
   currentWorkspaceId: null as string | null,
   currentRunId: null as string | null,
+  currentProfileId: null as string | null,
   workspaces: [] as WorkspaceRecord[],
   providers: [] as ProviderRecord[],
   profileList: [] as ProfileRecord[],
@@ -219,6 +220,12 @@ export async function loadWorkspaces(): Promise<WorkspaceRecord[]> {
   const resp = await window.carbonAPI.invoke({ type: "workspace/list" } as any) as any;
   if (resp.type === "workspace/list.success") {
     appState.workspaces = resp.data;
+    if (!appState.currentWorkspaceId && appState.workspaces.length > 0) {
+      appState.currentWorkspaceId = appState.workspaces[0]?.id ?? null;
+      if (appState.currentWorkspaceId) {
+        setWorkspaceLabel(appState.workspaces[0]?.name || "Workspace");
+      }
+    }
   }
   return appState.workspaces;
 }
@@ -298,6 +305,13 @@ export function openLiveViewport(profileId: string): void {
   const body = document.getElementById("live-viewport-body");
   if (!panel || !body) return;
 
+  appState.currentProfileId = profileId;
+
+  if (appState.viewportCleanup) {
+    appState.viewportCleanup();
+    appState.viewportCleanup = null;
+  }
+
   panel.classList.add("open");
   body.innerHTML = '<div class="live-viewport-placeholder">Connecting to viewport stream...</div>';
 
@@ -322,5 +336,9 @@ export function closeLiveViewport(): void {
   if (appState.viewportCleanup) {
     appState.viewportCleanup();
     appState.viewportCleanup = null;
+  }
+  // Stop telemetry timers on the main process
+  if (appState.currentProfileId) {
+    void window.carbonAPI.invoke({ type: "viewport/stop", profileId: appState.currentProfileId } as any);
   }
 }

@@ -9,9 +9,8 @@
  * - File tree sidebar
  */
 
-import { createEmptyState } from "./components.js";
+import { Toast, appState, createEmptyState, loadWorkspaces } from "./view-helpers.js";
 
-const currentWorkspaceId = "";
 let currentFilePath = "";
 let vaultFiles: string[] = [];
 
@@ -44,17 +43,30 @@ function applySyntaxHighlighting(text: string): string {
 }
 
 async function listVaultFiles(): Promise<string[]> {
-  const resp = await window.carbonAPI.invoke({ type: "vault/list", workspaceId: currentWorkspaceId } as unknown as Record<string, unknown>);
+  const workspaceId = await resolveWorkspaceId();
+  if (!workspaceId) return [];
+  const resp = await window.carbonAPI.invoke({ type: "vault/list", workspaceId } as unknown as Record<string, unknown>);
   return (resp as { files?: string[] }).files ?? [];
 }
 
 async function readVaultFile(filePath: string): Promise<string> {
-  const resp = await window.carbonAPI.invoke({ type: "vault/read", workspaceId: currentWorkspaceId, filePath } as unknown as Record<string, unknown>);
+  const workspaceId = await resolveWorkspaceId();
+  if (!workspaceId) return "";
+  const resp = await window.carbonAPI.invoke({ type: "vault/read", workspaceId, filePath } as unknown as Record<string, unknown>);
   return (resp as { content?: string }).content ?? "";
 }
 
 async function writeVaultFile(filePath: string, content: string): Promise<void> {
-  await window.carbonAPI.invoke({ type: "vault/write", workspaceId: currentWorkspaceId, filePath, content } as unknown as Record<string, unknown>);
+  const workspaceId = await resolveWorkspaceId();
+  if (!workspaceId) return;
+  await window.carbonAPI.invoke({ type: "vault/write", workspaceId, filePath, content } as unknown as Record<string, unknown>);
+}
+
+async function resolveWorkspaceId(): Promise<string | null> {
+  if (appState.currentWorkspaceId) return appState.currentWorkspaceId;
+  const workspaces = await loadWorkspaces();
+  if (appState.currentWorkspaceId) return appState.currentWorkspaceId;
+  return workspaces[0]?.id ?? null;
 }
 
 function parseWikilinks(content: string): string[] {
@@ -166,6 +178,11 @@ export function renderVault(container: HTMLElement): void {
 
   async function refreshFiles(filter?: string) {
     vaultFiles = await listVaultFiles();
+    if (vaultFiles.length === 0 && !await resolveWorkspaceId()) {
+      fileTree.innerHTML = "";
+      fileTree.appendChild(createEmptyState("icon-workspace", "Select a workspace", "Choose a workspace to open the vault."));
+      return;
+    }
     const filtered = filter ? vaultFiles.filter(f => f.toLowerCase().includes(filter.toLowerCase())) : vaultFiles;
     if (filtered.length === 0) {
       fileTree.innerHTML = "";
@@ -321,6 +338,11 @@ export function renderVault(container: HTMLElement): void {
   window.addEventListener("resize", syncEditorSize);
 
   container.querySelector("#vault-new-file")!.addEventListener("click", async () => {
+    const workspaceId = await resolveWorkspaceId();
+    if (!workspaceId) {
+      Toast.show("Select a workspace first", "warning");
+      return;
+    }
     const name = prompt("Note name?");
     if (!name) return;
     const filePath = name.endsWith(".md") ? name : `${name}.md`;
@@ -331,16 +353,15 @@ export function renderVault(container: HTMLElement): void {
 
   // Phase 11.1: Listen for vault filesystem changes from main process
   if (window.carbonAPI.onVaultChange) {
-    window.carbonAPI.onVaultChange((_data: unknown) => {
-      const data = _data as { workspaceId?: string; filePath?: string };
-      if (data.workspaceId === currentWorkspaceId) {
+    window.carbonAPI.onVaultChange((data: unknown) => {
+      const typed = data as { workspaceId?: string; filePath?: string; content?: string };
+      if (!typed.workspaceId || !typed.filePath || typed.content === undefined) return;
+      if (typed.workspaceId === appState.currentWorkspaceId) {
         void refreshFiles().then(() => {
-          if (currentFilePath && data.filePath === currentFilePath) {
-            void readVaultFile(currentFilePath).then((content) => {
-              editor.value = content;
-              updatePreview(content);
-              syncHighlighter();
-            });
+          if (currentFilePath && typed.filePath === currentFilePath) {
+            editor.value = typed.content ?? "";
+            updatePreview(typed.content ?? "");
+            syncHighlighter();
           }
         });
       }

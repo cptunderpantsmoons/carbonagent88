@@ -1,6 +1,7 @@
 import {
   Modal,
   Toast,
+  appState,
   createButton,
   createEmptyState,
   createSelect,
@@ -17,7 +18,9 @@ export function renderSkills(container: HTMLElement): void {
   const workspaceSelect = createSelect([], "Select workspace...");
   workspaceSelect.className = "form-select flex-1";
   const refreshBtn = createButton("Refresh", "secondary", "sm");
-  top.append(workspaceSelect, refreshBtn);
+  const exportBtn = createButton("Export", "secondary", "sm");
+  const importBtn = createButton("Import", "secondary", "sm");
+  top.append(workspaceSelect, refreshBtn, exportBtn, importBtn);
   container.appendChild(top);
 
   const list = document.createElement("div");
@@ -25,13 +28,59 @@ export function renderSkills(container: HTMLElement): void {
   list.className = "skills-grid";
   container.appendChild(list);
 
+  // Hidden file input for import
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json";
+  fileInput.style.display = "none";
+  container.appendChild(fileInput);
+
   void loadWorkspaces().then((workspaces) => {
     populateSelect(workspaceSelect, workspaces, (workspace) => workspace.name, "Select workspace...");
+    if (appState.currentWorkspaceId) {
+      workspaceSelect.value = appState.currentWorkspaceId;
+    }
     void renderSkillCards(list, workspaceSelect.value || undefined);
   });
 
   workspaceSelect.addEventListener("change", () => void renderSkillCards(list, workspaceSelect.value || undefined));
   refreshBtn.addEventListener("click", () => void renderSkillCards(list, workspaceSelect.value || undefined));
+
+  exportBtn.addEventListener("click", async () => {
+    const wsId = workspaceSelect.value;
+    if (!wsId) { Toast.show("Select a workspace first", "error"); return; }
+    const resp = await window.carbonAPI.invoke({ type: "skills/export", workspaceId: wsId } as any) as any;
+    if (resp.type === "skills/export.success") {
+      const json = JSON.stringify(resp.data, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `carbon-skills-${wsId.slice(0, 8)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      Toast.show("Skills exported", "success");
+    }
+  });
+
+  importBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as unknown[];
+      if (!Array.isArray(data)) throw new Error("Invalid format");
+      const resp = await window.carbonAPI.invoke({ type: "skills/import", data } as any) as any;
+      if (resp.type === "skills/import.success") {
+        Toast.show(`Imported ${resp.data.imported} skills (${resp.data.skipped} skipped)`, "success");
+        void renderSkillCards(list, workspaceSelect.value || undefined);
+      }
+    } catch (error: unknown) {
+      Toast.show(`Import failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+    fileInput.value = "";
+  });
 }
 
 async function renderSkillCards(list: HTMLElement, workspaceId?: string): Promise<void> {
@@ -45,7 +94,7 @@ async function renderSkillCards(list: HTMLElement, workspaceId?: string): Promis
     const resp = await window.carbonAPI.invoke({ type: "skills/list", workspaceId } as any) as any;
     if (resp.type !== "skills/list.success") return;
 
-    const skills = resp.skills ?? [];
+    const skills = resp.data ?? [];
     if (skills.length === 0) {
       list.appendChild(createEmptyState("icon-skill", "No skills yet", "Skills are automatically learned from successful agent runs."));
       return;

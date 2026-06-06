@@ -23,6 +23,7 @@ function getDocumentsDir(): string {
 
 const lockedProfiles = new Map<string, BrowserContext>();
 const activeBrowsers = new Map<string, Browser>();
+const loginBrowsers = new Map<string, Browser>();
 
 export function isProfileLocked(profileId: string): boolean {
   return lockedProfiles.has(profileId);
@@ -32,28 +33,52 @@ export function getLockedContext(profileId: string): BrowserContext | undefined 
   return lockedProfiles.get(profileId);
 }
 
-export async function lockProfile(profileId: string, profileDir: string): Promise<BrowserContext> {
+export async function closeLoginPortal(profileId: string): Promise<void> {
+  const browser = loginBrowsers.get(profileId);
+  if (browser) {
+    try { await browser.close(); } catch { /* ignore */ }
+    loginBrowsers.delete(profileId);
+  }
+}
+
+export async function lockProfile(profileId: string, profileDir: string, cdpUrl?: string): Promise<BrowserContext> {
   if (lockedProfiles.has(profileId)) {
     throw new Error(`Profile ${profileId} is already locked by another run`);
   }
 
-  if (!fs.existsSync(profileDir)) {
-    fs.mkdirSync(profileDir, { recursive: true });
+  // Close any open login portal for this profile
+  await closeLoginPortal(profileId);
+
+  let browser: Browser;
+  let context: BrowserContext;
+
+  if (cdpUrl) {
+    // Cloud CDP mode: connect to remote browser
+    browser = await chromium.connectOverCDP(cdpUrl);
+    context = browser.contexts()[0] ?? await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0",
+    });
+  } else {
+    // Local mode: launch Chromium with persistent profile
+    if (!fs.existsSync(profileDir)) {
+      fs.mkdirSync(profileDir, { recursive: true });
+    }
+
+    browser = await chromium.launch({
+      headless: false,
+      args: [
+        `--user-data-dir=${profileDir}`,
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+      ],
+    });
+
+    context = browser.contexts()[0] ?? await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0",
+    });
   }
-
-  const browser = await chromium.launch({
-    headless: false,
-    args: [
-      `--user-data-dir=${profileDir}`,
-      "--no-sandbox",
-      "--disable-blink-features=AutomationControlled",
-    ],
-  });
-
-  const context = browser.contexts()[0] ?? await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0",
-  });
 
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -118,6 +143,7 @@ export async function launchLoginPortal(profileId: string, profileDir: string, s
     await page.goto(startUrl ?? "about:blank");
 
     activeBrowsers.set(`login-${profileId}`, browser);
+    loginBrowsers.set(profileId, browser);
 
     return { success: true };
   } catch (err: any) {
@@ -137,17 +163,27 @@ export interface HealthCheckResult {
 }
 
 export async function checkSessionHealth(_profileId: string, profileDir: string, targetDomain: string): Promise<HealthCheckResult> {
+  // Reuse locked context if available to avoid launching duplicate browsers
+  const existingContext = getLockedContext(_profileId);
   let browser: Browser | null = null;
-  try {
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        `--user-data-dir=${profileDir}`,
-        "--no-sandbox",
-      ],
-    });
+  let context: BrowserContext;
+  let ownBrowser = false;
 
-    const context = browser.contexts()[0] ?? await browser.newContext();
+  try {
+    if (existingContext) {
+      context = existingContext;
+    } else {
+      browser = await chromium.launch({
+        headless: true,
+        args: [
+          `--user-data-dir=${profileDir}`,
+          "--no-sandbox",
+        ],
+      });
+      context = browser.contexts()[0] ?? await browser.newContext();
+      ownBrowser = true;
+    }
+
     const page = await context.newPage();
 
     const response = await page.goto(targetDomain, { waitUntil: "domcontentloaded", timeout: 15000 });
@@ -156,8 +192,12 @@ export async function checkSessionHealth(_profileId: string, profileDir: string,
 
     const isLoginPage = /login|signin|auth|authenticate/i.test(url) && url !== targetDomain;
 
-    await browser.close();
-    browser = null;
+    await page.close();
+
+    if (ownBrowser && browser) {
+      await browser.close();
+      browser = null;
+    }
 
     if (status >= 200 && status < 400 && !isLoginPage) {
       return { status: "active", domain: targetDomain, httpStatus: status };
@@ -167,7 +207,7 @@ export async function checkSessionHealth(_profileId: string, profileDir: string,
     }
     return { status: "unknown", domain: targetDomain, httpStatus: status };
   } catch (err: any) {
-    if (browser) await browser.close();
+    if (ownBrowser && browser) await browser.close();
     return { status: "unknown", domain: targetDomain, error: err.message ?? String(err) };
   }
 }
@@ -178,7 +218,6 @@ export async function checkSessionHealth(_profileId: string, profileDir: string,
 
 export interface StealthOpenInput {
   profileId: string;
-  profileDir: string;
   url: string;
 }
 

@@ -1,9 +1,23 @@
 import { CarbonDatabase, initDatabase } from "@carbon-agent/local-store";
 import { CronExpressionParser } from "cron-parser";
 import { runAgent } from "./agent-runner.js";
+import { emitWatcherAnalytics } from "./desktop-events.js";
+
+interface WatcherRunSnapshot {
+  watcherId: string;
+  watcherName: string;
+  startedAt: string;
+  completedAt?: string;
+  success: boolean;
+}
 
 export class WatcherManager {
   private intervals = new Map<string, ReturnType<typeof setInterval>>();
+  private history: WatcherRunSnapshot[] = [];
+
+  private publishHistory(): void {
+    emitWatcherAnalytics({ runs: this.history.slice(-50) });
+  }
 
   async sync(watcherId: string): Promise<void> {
     this.stop(watcherId);
@@ -78,9 +92,12 @@ export class WatcherManager {
   }
 
   private async execute(watcherId: string, prompt: string, workspaceId: string): Promise<void> {
+    const startedAt = new Date().toISOString();
     try {
       await initDatabase();
       const db = new CarbonDatabase();
+      const watcherRow = await db.getWatcher(watcherId);
+      const watcherName = String(watcherRow?.name ?? watcherRow?.prompt ?? watcherId);
       await db.updateWatcher({ id: watcherId, lastRunAt: new Date().toISOString(), lastRunStatus: "running" });
 
       // Find or use first provider
@@ -88,6 +105,8 @@ export class WatcherManager {
       if (providers.length === 0) {
         await db.updateWatcher({ id: watcherId, lastRunStatus: "failed" });
         console.error("[Watcher] No providers configured for workspace", workspaceId);
+        this.history.push({ watcherId, watcherName, startedAt, completedAt: new Date().toISOString(), success: false });
+        this.publishHistory();
         return;
       }
       const providerId = providers[0]!.id as string;
@@ -96,15 +115,27 @@ export class WatcherManager {
       const conversationId = crypto.randomUUID();
       await db.createConversation({ id: conversationId, workspaceId });
 
-      const result = await runAgent({ db, workspaceId, conversationId, providerId, message: prompt, maxSteps: 30 });
+      const result = await runAgent({ db, workspaceId, conversationId, providerId, message: prompt, maxSteps: 30, defaultProfileId: watcherRow?.profile_id as string | undefined });
+      const watcherStatus = result.runStatus === "completed" ? "success" : "failed";
 
-      await db.updateWatcher({ id: watcherId, lastRunStatus: result.runStatus });
-      console.log(`[Watcher] ${watcherId} completed: ${result.runStatus}`);
+      await db.updateWatcher({ id: watcherId, lastRunStatus: watcherStatus });
+      this.history.push({ watcherId, watcherName, startedAt, completedAt: new Date().toISOString(), success: watcherStatus === "success" });
+      this.publishHistory();
+      console.log(`[Watcher] ${watcherId} completed: ${watcherStatus}`);
     } catch (e) {
       console.error("[Watcher] execute error", e);
       try {
         const db = new CarbonDatabase();
         await db.updateWatcher({ id: watcherId, lastRunStatus: "failed" });
+        const watcherRow = await db.getWatcher(watcherId);
+        this.history.push({
+          watcherId,
+          watcherName: String(watcherRow?.name ?? watcherRow?.prompt ?? watcherId),
+          startedAt,
+          completedAt: new Date().toISOString(),
+          success: false,
+        });
+        this.publishHistory();
       } catch { /* ignore */ }
     }
   }

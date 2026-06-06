@@ -42,9 +42,93 @@ export function renderProviders(container: HTMLElement): void {
   layout.append(leftPanel, rightPanel);
   container.appendChild(layout);
 
+  // Model Roles Section
+  const rolesSection = document.createElement("div");
+  rolesSection.className = "model-roles-section mt-24";
+  rolesSection.innerHTML = '<h3 class="section-title">Model Roles</h3><p class="section-desc">Assign specialized providers to agent roles for optimized performance.</p>';
+  const rolesGrid = document.createElement("div");
+  rolesGrid.className = "model-roles-grid";
+  rolesGrid.id = "model-roles-grid";
+  rolesSection.appendChild(rolesGrid);
+  container.appendChild(rolesSection);
+
   addBtn.addEventListener("click", () => showProviderCreateForm(rightPanel));
   showProviderDetail(rightPanel, null);
   void renderProviderList();
+  void renderModelRoles(rolesGrid);
+}
+
+const ROLE_DEFINITIONS = [
+  { role: "assistant" as const, label: "Assistant", desc: "General conversations and task coordination" },
+  { role: "coder" as const, label: "Coder", desc: "Code generation, editing, and debugging" },
+  { role: "knowledge-graph" as const, label: "Knowledge Graph", desc: "Knowledge extraction and entity linking" },
+  { role: "meeting-notes" as const, label: "Meeting Notes", desc: "Summarization and note generation" },
+  { role: "track-block" as const, label: "Track Block", desc: "Task tracking and project management" },
+];
+
+async function renderModelRoles(grid: HTMLElement): Promise<void> {
+  grid.innerHTML = "";
+
+  const providers = await loadProviders();
+  let currentRoles: { role: string; providerId: string }[] = [];
+  const wsId = appState.currentWorkspaceId;
+
+  if (wsId) {
+    try {
+      const resp = await window.carbonAPI.invoke({ type: "model-roles/list", workspaceId: wsId } as any) as any;
+      if (resp.type === "model-roles/list.success") {
+        currentRoles = (resp.data as any[]) ?? [];
+      }
+    } catch { /* ignore */ }
+  }
+
+  for (const def of ROLE_DEFINITIONS) {
+    const assigned = currentRoles.find((r) => r.role === def.role);
+    const assignedProvider = assigned ? providers.find((p) => p.id === assigned.providerId) : null;
+
+    const card = document.createElement("div");
+    card.className = "model-role-card";
+
+    const options = [{ value: "", label: "Default (no override)" }];
+    for (const p of providers) {
+      options.push({ value: p.id, label: `${p.name} (${p.model})` });
+    }
+
+    const select = createSelect(options, "Select provider...");
+    if (assignedProvider) select.value = assignedProvider.id;
+
+    card.innerHTML = `
+      <div class="role-card-header">
+        <span class="role-card-label">${escapeHtml(def.label)}</span>
+        ${assignedProvider ? '<span class="badge badge-active">Assigned</span>' : '<span class="badge">Unassigned</span>'}
+      </div>
+      <div class="role-card-desc">${escapeHtml(def.desc)}</div>
+    `;
+    card.appendChild(select);
+
+    select.addEventListener("change", async () => {
+      if (!wsId) { Toast.show("Select a workspace first", "error"); return; }
+      if (select.value) {
+        const resp = await window.carbonAPI.invoke({
+          type: "model-roles/set",
+          data: { role: def.role, providerId: select.value, workspaceId: wsId },
+        } as any) as any;
+        if (resp.type === "model-roles/set.success") {
+          Toast.show(`${def.label} role updated`, "success");
+        }
+      } else if (assigned) {
+        await window.carbonAPI.invoke({
+          type: "model-roles/delete",
+          role: def.role,
+          workspaceId: wsId,
+        } as any);
+        Toast.show(`${def.label} role cleared`, "success");
+      }
+      void renderModelRoles(grid);
+    });
+
+    grid.appendChild(card);
+  }
 }
 
 function showProviderDetail(panel: HTMLElement, provider: ProviderRecord | null): void {
