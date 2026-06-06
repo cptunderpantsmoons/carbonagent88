@@ -24,6 +24,15 @@ export interface RunAgentInput {
   runId?: string;
   defaultProfileId?: string;
   onRuntime?: (runtime: { cancel(): void }) => void;
+  sessionId?: string;
+  sessionGoal?: string;
+  sessionRoot?: {
+    kind: "outlook-thread";
+    threadId: string;
+    threadSubject: string;
+    mailbox: string;
+  };
+  supervisionMode?: "watch" | "confirm";
 }
 
 export interface RunAgentResult {

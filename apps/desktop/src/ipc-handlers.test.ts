@@ -10,6 +10,26 @@ const mockState = vi.hoisted(() => ({
 const mockDb = {
   listDocuments: vi.fn(),
   listSkills: vi.fn(),
+  createOrchestrationSession: vi.fn().mockResolvedValue(undefined),
+  getOrchestrationSession: vi.fn().mockResolvedValue({
+    id: "550e8400-e29b-41d4-a716-446655440022",
+    workspace_id: "550e8400-e29b-41d4-a716-446655440020",
+    conversation_id: "550e8400-e29b-41d4-a716-446655440021",
+    run_id: "550e8400-e29b-41d4-a716-446655440023",
+    root_json: JSON.stringify({ kind: "outlook-thread", threadId: "t-1", threadSubject: "Month end", mailbox: "finance@client.com" }),
+    supervision_mode: "watch",
+    status: "draft",
+    current_goal: "Collect and prepare reporting inputs",
+    completion_summary: null,
+    created_at: "2026-06-06T00:00:00.000Z",
+    updated_at: "2026-06-06T00:00:00.000Z",
+  }),
+  listSessionEvents: vi.fn().mockResolvedValue([]),
+  getSessionWorkingSet: vi.fn().mockResolvedValue(undefined),
+  getRun: vi.fn().mockResolvedValue({
+    id: "550e8400-e29b-41d4-a716-446655440023",
+    provider_id: "550e8400-e29b-41d4-a716-446655440024",
+  }),
 };
 
 vi.mock("electron", () => ({
@@ -45,6 +65,12 @@ vi.mock("@carbon-agent/local-store", () => ({
     listSkills = mockDb.listSkills;
     getProviderWithKey = vi.fn();
     getProvider = vi.fn();
+    createOrchestrationSession = mockDb.createOrchestrationSession;
+    getOrchestrationSession = mockDb.getOrchestrationSession;
+    listSessionEvents = mockDb.listSessionEvents;
+    getSessionWorkingSet = mockDb.getSessionWorkingSet;
+    getRun = mockDb.getRun;
+    updateOrchestrationSessionStatus = vi.fn().mockResolvedValue(undefined);
   },
 }));
 
@@ -64,6 +90,11 @@ vi.mock("./document-generator.js", () => ({
 
 vi.mock("./agent-runner.js", () => ({
   runAgent: vi.fn().mockResolvedValue({ runStatus: "completed", fullResponse: "done", runId: "run-1" }),
+}));
+
+vi.mock("./session-events.js", () => ({
+  emitSessionUpdate: vi.fn(),
+  emitSessionWorkingSet: vi.fn(),
 }));
 
 vi.mock("./watcher-manager.js", () => ({
@@ -163,5 +194,32 @@ describe("ipc-handlers real routes", () => {
         }),
       ]),
     });
+  });
+
+  it("creates an orchestration session", async () => {
+    const response = await mockState.registeredHandler?.({}, {
+      type: "session/create",
+      workspaceId: "550e8400-e29b-41d4-a716-446655440020",
+      conversationId: "550e8400-e29b-41d4-a716-446655440021",
+      runId: "550e8400-e29b-41d4-a716-446655440022",
+      root: { kind: "outlook-thread", threadId: "t-1", threadSubject: "Month end", mailbox: "finance@client.com" },
+      supervisionMode: "watch",
+      goal: "Collect and prepare reporting inputs",
+    });
+
+    expect(response).toMatchObject({
+      type: "session/create.success",
+      data: expect.objectContaining({
+        supervisionMode: "watch",
+        currentGoal: "Collect and prepare reporting inputs",
+      }),
+    });
+  });
+
+  it("returns working-set and event snapshots", async () => {
+    const events = await mockState.registeredHandler?.({}, { type: "session/events", id: "550e8400-e29b-41d4-a716-446655440022" });
+    const workingSet = await mockState.registeredHandler?.({}, { type: "session/working-set", id: "550e8400-e29b-41d4-a716-446655440022" });
+    expect(events).toMatchObject({ type: "session/events.success" });
+    expect(workingSet).toMatchObject({ type: "session/working-set.success" });
   });
 });

@@ -17,6 +17,7 @@ import { generateDocument } from "./document-generator.js";
 import { runAgent } from "./agent-runner.js";
 import { WatcherManager } from "./watcher-manager.js";
 import { emitVaultChange, startProfileTelemetry, stopProfileTelemetry } from "./desktop-events.js";
+import { emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { recordGeneratedDocument } from "./document-records.js";
 import { detectAllClis } from "./cli-subagent.js";
 
@@ -31,6 +32,34 @@ async function ensureDb(): Promise<CarbonDatabase> {
   }
   return _db;
 }
+
+type OrchestrationDb = CarbonDatabase & {
+  createOrchestrationSession(p: {
+    id: string;
+    workspaceId: string;
+    conversationId: string;
+    runId: string;
+    rootKind: string;
+    rootJson: string;
+    supervisionMode: "watch" | "confirm";
+    status: "draft" | "running" | "waiting" | "completed" | "failed" | "cancelled";
+    currentGoal: string;
+    completionSummary?: string | null;
+  }): Promise<void>;
+  getOrchestrationSession(id: string): Promise<Record<string, unknown> | undefined>;
+  updateOrchestrationSessionStatus(id: string, status: string, completionSummary?: string | null): Promise<void>;
+  appendSessionEvent(p: { id: string; sessionId: string; role: string; kind: string; summary: string; payloadJson: string }): Promise<void>;
+  listSessionEvents(sessionId: string): Promise<Record<string, unknown>[]>;
+  saveSessionWorkingSet(p: {
+    sessionId: string;
+    entitiesJson: string;
+    documentsJson: string;
+    metricsJson: string;
+    gapsJson: string;
+    provenanceScore: number;
+  }): Promise<void>;
+  getSessionWorkingSet(sessionId: string): Promise<Record<string, unknown> | undefined>;
+};
 
 const activeRuns = new Map<string, { cancel: () => void }>();
 let watcherManager: WatcherManager | null = null;
@@ -155,6 +184,47 @@ function mapMemoryRow(row: Record<string, unknown>) {
   };
 }
 
+function mapOrchestrationSessionRow(row: Record<string, unknown> | undefined) {
+  if (!row) throw new Error("Session row missing");
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    conversationId: String(row.conversation_id),
+    runId: String(row.run_id),
+    root: JSON.parse(String(row.root_json)),
+    supervisionMode: String(row.supervision_mode),
+    status: String(row.status),
+    currentGoal: String(row.current_goal),
+    completionSummary: row.completion_summary == null ? null : String(row.completion_summary),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapSessionEventRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    role: String(row.role),
+    kind: String(row.kind),
+    summary: String(row.summary),
+    payload: JSON.parse(String(row.payload_json ?? "{}")),
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapWorkingSetRow(sessionId: string, row: Record<string, unknown> | undefined) {
+  return {
+    sessionId,
+    entities: JSON.parse(String(row?.entities_json ?? "[]")),
+    documents: JSON.parse(String(row?.documents_json ?? "[]")),
+    metrics: JSON.parse(String(row?.metrics_json ?? "[]")),
+    gaps: JSON.parse(String(row?.gaps_json ?? "[]")),
+    provenanceScore: Number(row?.provenance_score ?? 0),
+    updatedAt: String(row?.updated_at ?? new Date().toISOString()),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helper: profile session operations
 // ---------------------------------------------------------------------------
@@ -188,7 +258,7 @@ async function unlockProfile(profileId: string): Promise<void> {
 ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
   try {
     const request = IpcRequestSchema.parse(rawRequest);
-    const d = await ensureDb();
+    const d = (await ensureDb()) as OrchestrationDb;
 
     switch (request.type) {
       // ==================== Provider ====================
@@ -376,6 +446,71 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           activeRuns.delete(request.id);
         }
         return { type: "run/stream.complete" };
+      }
+
+      // ==================== Orchestration ====================
+      case "session/create": {
+        const id = crypto.randomUUID();
+        await d.createOrchestrationSession({
+          id,
+          workspaceId: request.workspaceId,
+          conversationId: request.conversationId,
+          runId: request.runId,
+          rootKind: request.root.kind,
+          rootJson: JSON.stringify(request.root),
+          supervisionMode: request.supervisionMode,
+          status: "draft",
+          currentGoal: request.goal,
+        });
+        const row = await d.getOrchestrationSession(id);
+        const session = mapOrchestrationSessionRow(row as Record<string, unknown> | undefined);
+        emitSessionUpdate({ sessionId: session.id, status: session.status, currentGoal: session.currentGoal });
+        return { type: "session/create.success", data: session };
+      }
+      case "session/get": {
+        const row = await d.getOrchestrationSession(request.id);
+        if (!row) return { type: "error", error: "Session not found", code: "SESSION_NOT_FOUND" };
+        return { type: "session/get.success", data: mapOrchestrationSessionRow(row as Record<string, unknown>) };
+      }
+      case "session/events": {
+        const rows = await d.listSessionEvents(request.id);
+        return { type: "session/events.success", events: rows.map((row: Record<string, unknown>) => mapSessionEventRow(row)) };
+      }
+      case "session/working-set": {
+        const row = await d.getSessionWorkingSet(request.id);
+        return { type: "session/working-set.success", data: mapWorkingSetRow(request.id, row as Record<string, unknown> | undefined) };
+      }
+      case "session/start": {
+        const row = await d.getOrchestrationSession(request.id);
+        if (!row) return { type: "error", error: "Session not found", code: "SESSION_NOT_FOUND" };
+        const run = await d.getRun(String(row.run_id));
+        if (!run) return { type: "error", error: "Run not found", code: "RUN_NOT_FOUND" };
+        if (!run.provider_id) return { type: "error", error: "Run has no provider", code: "PROVIDER_NOT_FOUND" };
+        const root = JSON.parse(String(row.root_json)) as { kind: "outlook-thread"; threadId: string; threadSubject: string; mailbox: string };
+        const runResult = await runAgent({
+          db: d,
+          workspaceId: String(row.workspace_id),
+          conversationId: String(row.conversation_id),
+          providerId: String(run.provider_id),
+          message: String(row.current_goal),
+          runId: String(row.run_id),
+          sessionId: String(row.id),
+          sessionGoal: String(row.current_goal),
+          sessionRoot: root,
+          supervisionMode: String(row.supervision_mode) as "watch" | "confirm",
+        });
+        await d.updateOrchestrationSessionStatus(String(row.id), runResult.runStatus, runResult.runError ?? null);
+        emitSessionUpdate({ sessionId: String(row.id), status: runResult.runStatus, currentGoal: String(row.current_goal) });
+        const workingSet = await d.getSessionWorkingSet(String(row.id));
+        if (workingSet) {
+          emitSessionWorkingSet({
+            sessionId: String(row.id),
+            documents: JSON.parse(String(workingSet.documents_json ?? "[]")),
+            gaps: JSON.parse(String(workingSet.gaps_json ?? "[]")),
+            provenanceScore: Number(workingSet.provenance_score ?? 0),
+          });
+        }
+        return { type: "session/start.success", data: runResult };
       }
 
       // ==================== Ingestion ====================
