@@ -2,7 +2,7 @@
  * Agent Runner — Shared execution logic for both IPC and watcher triggers.
  */
 
-import { AgentRuntime, type ToolExecutor } from "@carbon-agent/core-runtime";
+import { AgentRuntime, BrowserOrchestrationRuntime, type ToolExecutor } from "@carbon-agent/core-runtime";
 import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole } from "@carbon-agent/local-store";
 import { parseFile, chunkText, storeChunks, searchChunks, getEmbeddingProvider } from "@carbon-agent/ingestion";
 import { generateDocument } from "./document-generator.js";
@@ -10,6 +10,7 @@ import { stealthOpen, stealthScrape, stealthDownload } from "@carbon-agent/cloak
 import fs from "node:fs";
 import path from "node:path";
 import { emitAgentTopology, emitVaultChange } from "./desktop-events.js";
+import { emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { recordGeneratedDocument } from "./document-records.js";
 import { spawnCliSubAgent, type CliType } from "./cli-subagent.js";
 import type { DesktopTopologyEdge, DesktopTopologyNode } from "./desktop-events.js";
@@ -41,6 +42,19 @@ export interface RunAgentResult {
   runError?: string;
   runId: string;
 }
+
+type SessionStore = CarbonDatabase & {
+  appendSessionEvent(p: { id: string; sessionId: string; role: string; kind: string; summary: string; payloadJson: string }): Promise<void>;
+  saveSessionWorkingSet(p: {
+    sessionId: string;
+    entitiesJson: string;
+    documentsJson: string;
+    metricsJson: string;
+    gapsJson: string;
+    provenanceScore: number;
+  }): Promise<void>;
+  updateOrchestrationSessionStatus(id: string, status: string, completionSummary?: string | null): Promise<void>;
+};
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const { db, workspaceId, conversationId, providerId, message, maxSteps = 50 } = input;
@@ -343,6 +357,139 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let runStatus: "completed" | "failed" | "cancelled" = "completed";
   let runError: string | undefined;
   const runToolCalls: { name: string; input: Record<string, unknown>; output?: unknown }[] = [];
+
+  if (input.sessionId && input.sessionGoal && input.sessionRoot) {
+    const sessionId = input.sessionId;
+    const sessionGoal = input.sessionGoal;
+    const sessionRoot = input.sessionRoot;
+    const sessionDb = db as SessionStore;
+    await sessionDb.updateOrchestrationSessionStatus(sessionId, "running");
+    emitTopology("running");
+
+    const browserOrchestrationDeps: ConstructorParameters<typeof BrowserOrchestrationRuntime>[0] = {
+      maxRounds: maxSteps,
+      onEvent: async (event) => {
+        await sessionDb.appendSessionEvent({
+          id: event.id,
+          sessionId,
+          role: event.role,
+          kind: event.kind,
+          summary: event.summary,
+          payloadJson: JSON.stringify(event.payload ?? {}),
+        });
+
+        if (event.kind === "working_set_updated") {
+          const payload = event.payload as {
+            documents?: unknown[];
+            gaps?: string[];
+            provenanceScore?: number;
+          };
+          emitSessionWorkingSet({
+            sessionId,
+            documents: Array.isArray(payload.documents) ? payload.documents : [],
+            gaps: Array.isArray(payload.gaps) ? payload.gaps : [],
+            provenanceScore: typeof payload.provenanceScore === "number" ? payload.provenanceScore : 0,
+          });
+        }
+      },
+      saveWorkingSet: async (state) => {
+        await sessionDb.saveSessionWorkingSet({
+          sessionId: state.sessionId,
+          entitiesJson: JSON.stringify(state.entities),
+          documentsJson: JSON.stringify(state.documents),
+          metricsJson: JSON.stringify(state.metrics),
+          gapsJson: JSON.stringify(state.gaps),
+          provenanceScore: state.provenanceScore,
+        });
+      },
+      delegateSpecialist: async ({ role, taskDescription, context, workspaceId: delegateWorkspaceId }) => {
+        const specialistRunId = `${runId}-session-specialist`;
+        const specialistRuntime = new AgentRuntime(
+          {
+            providerConfig,
+            runId: specialistRunId,
+            workspaceId: delegateWorkspaceId,
+            conversationId,
+            maxSteps: 20,
+            systemPrompt: `You are a ${role} output specialist. Turn validated evidence into the final deliverable.`,
+          },
+          executor,
+        );
+
+        let specialistResult = "";
+        try {
+          for await (const event of specialistRuntime.run(`${taskDescription}\n\n${context}`)) {
+            if (event.type === "text" && event.content) {
+              specialistResult += event.content;
+            }
+          }
+          return { success: true, result: specialistResult || taskDescription };
+        } catch (error: unknown) {
+          return {
+            success: false,
+            result: specialistResult,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      browserTools: {
+        stealth_open: executor.stealth_open,
+        stealth_scrape: executor.stealth_scrape,
+        stealth_download: executor.stealth_download,
+        ingest_file: executor.ingest_file,
+        rag_retrieve: executor.rag_retrieve,
+      },
+      planner: async ({ round, workingSet }) => ({
+        summary: round === 0
+          ? `Collect evidence for ${sessionGoal}`
+          : `Resolve remaining gaps for ${sessionGoal}`,
+        source: round === 0 ? sessionRoot.kind : "xero",
+        query: round === 0 ? sessionRoot.threadSubject : (workingSet.gaps[0] ?? sessionGoal),
+      }),
+      validator: async ({ workingSet }) => ({
+        ok: workingSet.documents.length > 0,
+        gaps: workingSet.documents.length > 0 ? [] : ["No supporting documents collected"],
+      }),
+      judge: async ({ workingSet, validation }) => ({
+        complete: validation.ok && workingSet.documents.length > 0,
+        gaps: validation.gaps.length > 0 ? validation.gaps : (workingSet.documents.length > 0 ? [] : ["Need evidence"]),
+        summary: validation.ok ? "Evidence sufficient" : "Evidence incomplete",
+      }),
+    };
+    const browserOrchestration = new BrowserOrchestrationRuntime(browserOrchestrationDeps);
+
+    const sessionResult = await browserOrchestration.run({
+      sessionId,
+      workspaceId,
+      conversationId,
+      runId,
+      goal: input.sessionGoal,
+      supervisionMode: input.supervisionMode ?? "watch",
+      root: input.sessionRoot,
+      profileId: input.defaultProfileId,
+    });
+
+    const sessionRunStatus = sessionResult.status;
+    const sessionFullResponse = sessionResult.fullResponse;
+    const sessionRunError = sessionResult.runError;
+
+    if (sessionRunStatus === "completed" && !sessionRunError) {
+      emitTopology("completed");
+    } else {
+      emitTopology("failed");
+    }
+
+    await sessionDb.updateRunStatus(runId, sessionRunStatus, { completedAt: new Date().toISOString() });
+    await sessionDb.addMessage({ id: crypto.randomUUID(), conversationId, role: "assistant", content: sessionFullResponse });
+    emitSessionUpdate({ sessionId, status: sessionRunStatus, currentGoal: input.sessionGoal });
+
+    try {
+      const logEntry = JSON.stringify({ timestamp: new Date().toISOString(), runId, status: sessionRunStatus, error: sessionRunError ?? null }) + "\n";
+      fs.appendFileSync(logPath, logEntry);
+    } catch { /* ignore log write errors */ }
+
+    return { runStatus: sessionRunStatus, fullResponse: sessionFullResponse, runError: sessionRunError, runId };
+  }
 
   try {
     for await (const event of runtime.run(message)) {
