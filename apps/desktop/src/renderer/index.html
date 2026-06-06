@@ -4,54 +4,59 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Carbon Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Syne:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="app">
-    <nav class="sidebar">
+    <nav class="sidebar" role="navigation" aria-label="Main navigation">
       <div class="sidebar-header">
-        <span class="logo">C</span>
-        <span>Carbon Agent</span>
+        <span class="logo" aria-hidden="true">
+          <span class="logo-mark">C</span>
+        </span>
+        <span class="logo-text">Carbon</span>
       </div>
 
       <div class="nav-group">
         <div class="nav-group-label">Core</div>
-        <div class="nav-item active" data-view="playground">P Playground</div>
-        <div class="nav-item" data-view="vault">V Knowledge Vault</div>
-        <div class="nav-item" data-view="watchers">W Watchers</div>
+        <div class="nav-item active" data-view="playground" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9679;</span> Playground</div>
+        <div class="nav-item" data-view="vault" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9632;</span> Knowledge Vault</div>
+        <div class="nav-item" data-view="watchers" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9201;</span> Watchers</div>
       </div>
 
       <div class="nav-divider"></div>
 
       <div class="nav-group">
         <div class="nav-group-label">Data</div>
-        <div class="nav-item" data-view="workspaces">W Workspaces</div>
-        <div class="nav-item" data-view="ingestion">I Ingestion</div>
-        <div class="nav-item" data-view="outputs">O Outputs</div>
+        <div class="nav-item" data-view="workspaces" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9633;</span> Workspaces</div>
+        <div class="nav-item" data-view="ingestion" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9638;</span> Ingestion</div>
+        <div class="nav-item" data-view="outputs" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9654;</span> Outputs</div>
       </div>
 
       <div class="nav-divider"></div>
 
       <div class="nav-group">
         <div class="nav-group-label">Configuration</div>
-        <div class="nav-item" data-view="providers">A AI Providers</div>
-        <div class="nav-item" data-view="profiles">C Cloak Bridge</div>
+        <div class="nav-item" data-view="providers" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9671;</span> AI Providers</div>
+        <div class="nav-item" data-view="profiles" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9672;</span> Cloak Bridge</div>
       </div>
 
       <div class="nav-divider"></div>
 
       <div class="nav-group">
         <div class="nav-group-label">Cognitive</div>
-        <div class="nav-item" data-view="skills">L Learned Skills</div>
+        <div class="nav-item" data-view="skills" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9670;</span> Learned Skills</div>
       </div>
 
       <div class="nav-divider"></div>
 
       <div class="nav-group">
         <div class="nav-group-label">Debug</div>
-        <div class="nav-item" data-view="topology">T Topology</div>
-        <div class="nav-item" data-view="axtree">X AXTree</div>
-        <div class="nav-item" data-view="watcher-analytics">A Analytics</div>
+        <div class="nav-item" data-view="topology" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#11042;</span> Topology</div>
+        <div class="nav-item" data-view="axtree" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#8862;</span> AXTree</div>
+        <div class="nav-item" data-view="watcher-analytics" role="button" tabindex="0"><span class="nav-icon" aria-hidden="true">&#9678;</span> Analytics</div>
       </div>
 
       <div class="sidebar-footer">
@@ -61,50 +66,50 @@
     </nav>
 
     <div class="main">
-      <div class="top-bar">
+      <header class="top-bar">
         <div class="top-bar-context">
           <span class="top-bar-workspace" id="top-bar-workspace-label">Workspace</span>
-          <span class="top-bar-divider">/</span>
+          <span class="top-bar-divider" aria-hidden="true">/</span>
           <span class="top-bar-provider" id="top-bar-provider-label">No provider</span>
         </div>
         <div class="top-bar-status">
-          <button class="btn btn-ghost btn-sm" id="cmdk-trigger">Quick Actions</button>
+          <button class="btn btn-ghost btn-sm" id="cmdk-trigger" aria-label="Quick Actions">Quick Actions</button>
           <span class="status-indicator">
             <span class="status-dot" id="topbar-dot"></span>
             <span id="run-status-text">Idle</span>
           </span>
           <span id="active-runs-count" class="font-11 text-muted">0</span>
         </div>
-      </div>
+      </header>
 
       <div class="page-title-bar">
         <h1 id="page-title">Playground</h1>
       </div>
 
       <div class="content-shell">
-        <div class="content" id="content"></div>
+        <main class="content" id="content"></main>
 
-        <div class="inspector" id="inspector">
+        <aside class="inspector" id="inspector" aria-label="Details panel">
           <div class="inspector-header">
             <span>Details</span>
-            <button class="btn btn-ghost btn-sm" id="inspector-close">&times;</button>
+            <button class="btn btn-ghost btn-sm" id="inspector-close" aria-label="Close inspector">&times;</button>
           </div>
           <div class="inspector-body" id="inspector-body">
             <div class="empty-state">
               <div class="empty-state-text">Select an item to see details</div>
             </div>
           </div>
-        </div>
+        </aside>
       </div>
     </div>
   </div>
 
-  <div id="toast-container"></div>
+  <div id="toast-container" aria-live="polite"></div>
   <div id="modal-container"></div>
 
   <div class="cmdk-backdrop" id="cmdk-backdrop" tabindex="-1">
     <div class="cmdk-container" role="dialog" aria-modal="true" aria-label="Quick actions">
-      <input id="cmdk-input" class="cmdk-input" type="text" placeholder="Search views and actions...">
+      <input id="cmdk-input" class="cmdk-input" type="text" placeholder="Search views and actions..." autocomplete="off">
       <div id="cmdk-results" class="cmdk-results"></div>
     </div>
   </div>
