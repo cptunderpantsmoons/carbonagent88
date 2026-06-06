@@ -10,7 +10,7 @@ import { stealthOpen, stealthScrape, stealthDownload } from "@carbon-agent/cloak
 import fs from "node:fs";
 import path from "node:path";
 import { emitAgentTopology, emitVaultChange } from "./desktop-events.js";
-import { emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
+import { emitSessionEvent, emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { recordGeneratedDocument } from "./document-records.js";
 import { spawnCliSubAgent, type CliType } from "./cli-subagent.js";
 import type { DesktopTopologyEdge, DesktopTopologyNode } from "./desktop-events.js";
@@ -376,6 +376,18 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           kind: event.kind,
           summary: event.summary,
           payloadJson: JSON.stringify(event.payload ?? {}),
+        });
+        emitSessionEvent({
+          sessionId,
+          event: {
+            id: event.id,
+            sessionId,
+            role: event.role,
+            kind: event.kind,
+            summary: event.summary,
+            payload: event.payload ?? {},
+            createdAt: new Date().toISOString(),
+          },
         });
 
         if (event.kind === "working_set_updated") {

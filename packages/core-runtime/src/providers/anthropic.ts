@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
-import type { ChatRequest, ChatResponse, StreamChunk, LLMProvider } from "../gateway";
+import type { ChatRequest, ChatResponse, StreamChunk, LLMProvider } from "../gateway.js";
 
 /**
  * Anthropic Claude Provider

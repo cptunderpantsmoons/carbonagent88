@@ -9,8 +9,8 @@
  * All tool calls and LLM streams are written to JSONL run logs.
  */
 
-import type { LLMProvider, ChatMessage, ToolDefinition } from "./gateway";
-import { createProvider } from "./gateway";
+import type { LLMProvider, ChatMessage, ToolDefinition } from "./gateway.js";
+import { createProvider } from "./gateway.js";
 import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
 import crypto from "node:crypto";
 import fs from "node:fs";

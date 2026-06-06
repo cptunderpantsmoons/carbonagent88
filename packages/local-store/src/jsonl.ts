@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getRunsDir, getRunLogPath } from "./paths";
+import { getRunsDir, getRunLogPath } from "./paths.js";
 
 /**
  * JSONL Append-Only Logger

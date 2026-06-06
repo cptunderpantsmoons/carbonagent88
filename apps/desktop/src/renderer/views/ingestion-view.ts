@@ -2,9 +2,10 @@ import {
   Toast,
   createBadge,
   createButton,
-  createCard,
   createEmptyState,
+  createFormGroup,
   createListItem,
+  createSelect,
   createStatusDot,
   loadWorkspaces,
   populateSelect,
@@ -12,50 +13,74 @@ import {
 
 export function renderIngestion(container: HTMLElement): void {
   container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack ingestion-shell";
 
-  const pipelineCard = document.createElement("div");
-  pipelineCard.className = "pipeline-card";
-  pipelineCard.innerHTML = `
-    <div class="pipeline-header">
-      <span class="pipeline-title">Document Pipeline</span>
-      <span class="pipeline-status">Ready</span>
-    </div>
-    <div class="pipeline-phases">
-      <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Detect</span></div>
-      <div class="pipeline-phase-line"></div>
-      <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Parse</span></div>
-      <div class="pipeline-phase-line"></div>
-      <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Embed</span></div>
-      <div class="pipeline-phase-line"></div>
-      <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Graph Extract</span></div>
-    </div>
-    <div class="pipeline-info">Scans <code>~/Documents/carbon-agent/</code> for supported formats: PDF, DOCX, MD, TXT, HTML</div>
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Ingestion</div>
+    <div class="view-hero-title">Scan, parse, embed, and graph-extract in one pass.</div>
+    <div class="view-hero-copy">The pipeline detects supported formats (PDF, DOCX, MD, TXT, HTML), parses content, generates embeddings, and extracts knowledge-graph entities — all scoped to the selected workspace.</div>
   `;
-  container.appendChild(pipelineCard);
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Detect</span><span>Parse</span><span>Embed</span><span>Graph Extract</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
 
-  const controlsCard = createCard("");
-  const controls = document.createElement("div");
-  controls.className = "flex gap-2 w-100";
+  const pipelinePanel = document.createElement("section");
+  pipelinePanel.className = "view-panel";
+  const pipelineHeader = document.createElement("div");
+  pipelineHeader.className = "view-panel-header";
+  pipelineHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">Document Pipeline</div>
+      <div class="view-panel-copy">Scans <code>~/Documents/carbon-agent/</code> for supported formats.</div>
+    </div>
+  `;
+  const pipelinePhases = document.createElement("div");
+  pipelinePhases.className = "pipeline-phases";
+  pipelinePhases.innerHTML = `
+    <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Detect</span></div>
+    <div class="pipeline-phase-line"></div>
+    <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Parse</span></div>
+    <div class="pipeline-phase-line"></div>
+    <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Embed</span></div>
+    <div class="pipeline-phase-line"></div>
+    <div class="pipeline-phase"><span class="pipeline-phase-dot"></span><span>Graph Extract</span></div>
+  `;
+  pipelinePanel.append(pipelineHeader, pipelinePhases);
+  shell.appendChild(pipelinePanel);
 
-  const workspaceWrap = document.createElement("div");
-  workspaceWrap.className = "flex-1";
-  const label = document.createElement("label");
-  label.className = "form-label";
-  label.textContent = "Target Workspace";
-  const workspaceSelect = document.createElement("select");
-  workspaceSelect.className = "form-select";
-  workspaceWrap.append(label, workspaceSelect);
-  controls.appendChild(workspaceWrap);
-  controlsCard.appendChild(controls);
+  const controlPanel = document.createElement("section");
+  controlPanel.className = "view-panel";
+  const workspaceSelect = createSelect([], "Select workspace...");
+  controlPanel.append(
+    createFormGroup("Target Workspace", workspaceSelect),
+  );
 
   const scanBtn = createButton("Scan Documents Folder", "primary");
   scanBtn.className = "btn btn-primary w-100 mt-8";
-  controlsCard.appendChild(scanBtn);
-  container.appendChild(controlsCard);
+  controlPanel.appendChild(scanBtn);
+  shell.appendChild(controlPanel);
 
+  const resultsPanel = document.createElement("section");
+  resultsPanel.className = "view-panel";
+  const resultsHeader = document.createElement("div");
+  resultsHeader.className = "view-panel-header";
+  resultsHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">Results</div>
+      <div class="view-panel-copy">Discovered documents appear here after scanning.</div>
+    </div>
+  `;
   const results = document.createElement("div");
-  results.className = "mt-3";
-  container.appendChild(results);
+  results.id = "ingestion-results";
+  resultsPanel.append(resultsHeader, results);
+  shell.appendChild(resultsPanel);
+
+  container.appendChild(shell);
 
   void loadWorkspaces().then((workspaces) => {
     populateSelect(workspaceSelect, workspaces, (workspace) => workspace.name, "Select workspace...");

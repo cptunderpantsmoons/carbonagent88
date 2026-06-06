@@ -2,7 +2,6 @@ import {
   Toast,
   appState,
   createButton,
-  createCard,
   createEmptyState,
   createFormGroup,
   createInput,
@@ -16,25 +15,60 @@ import {
 
 export function renderWorkspaces(container: HTMLElement): void {
   container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack workspaces-shell";
 
-  const listCard = createCard("Workspaces", "Projects with isolated document vaults and conversations.");
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Workspaces</div>
+    <div class="view-hero-title">Isolate projects with their own vaults and conversations.</div>
+    <div class="view-hero-copy">Each workspace carries an independent document vault, conversation history, and skill library. Select one to make it active across the app.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Isolated vaults</span><span>Conversations</span><span>Skills</span><span>Outputs</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const listPanel = document.createElement("section");
+  listPanel.className = "view-panel";
+  const listHeader = document.createElement("div");
+  listHeader.className = "view-panel-header";
+  listHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">Your Workspaces</div>
+      <div class="view-panel-copy">Click a workspace to activate it and inspect its vault.</div>
+    </div>
+  `;
   const listEl = document.createElement("div");
   listEl.className = "list";
   listEl.id = "workspace-list";
-  listCard.appendChild(listEl);
-  container.appendChild(listCard);
+  listPanel.append(listHeader, listEl);
+  shell.appendChild(listPanel);
 
-  const addCard = createCard("New Workspace");
+  const createPanel = document.createElement("section");
+  createPanel.className = "view-panel";
+  const createHeader = document.createElement("div");
+  createHeader.className = "view-panel-header";
+  createHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">New Workspace</div>
+      <div class="view-panel-copy">Create a fresh project with its own isolated vault.</div>
+    </div>
+  `;
   const nameInput = createInput("My Project");
   const descInput = createInput("Optional");
-  addCard.append(
+  createPanel.append(
+    createHeader,
     createFormGroup("Name", nameInput),
     createFormGroup("Description", descInput, "Helps organize your workspace purpose"),
   );
   const saveBtn = createButton("Create Workspace", "primary");
-  saveBtn.classList.add("w-100", "mt-4");
-  addCard.appendChild(saveBtn);
-  container.appendChild(addCard);
+  saveBtn.className = "btn btn-primary w-100 mt-8";
+  createPanel.appendChild(saveBtn);
+  shell.appendChild(createPanel);
+  container.appendChild(shell);
 
   saveBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();

@@ -27,26 +27,65 @@ function hasActiveTopology(): boolean {
 }
 
 export function renderTopology(container: HTMLElement): void {
-  container.innerHTML = `
-    <div class="topology-header">
-      <h2>Agent Topology</h2>
-      <div class="topology-legend">
-        <span class="topology-dot status-dot status-dot-muted"></span> Idle
-        <span class="topology-dot status-dot status-dot-warning"></span> Running
-        <span class="topology-dot status-dot status-dot-success"></span> Completed
-        <span class="topology-dot status-dot status-dot-danger"></span> Failed
-      </div>
+  container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack topology-shell";
+
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Agent Topology</div>
+    <div class="view-hero-title">Visualize multi-agent delegation in real time.</div>
+    <div class="view-hero-copy">When a complex task triggers sub-agents, the delegation graph appears here. Pan and zoom to inspect the agent hierarchy.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Supervisor</span><span>Sub-agents</span><span>Zoom / Pan</span><span>Live updates</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const graphPanel = document.createElement("section");
+  graphPanel.className = "view-panel";
+
+  const headerEl = document.createElement("div");
+  headerEl.className = "topology-header";
+  headerEl.innerHTML = `
+    <h2>Topology Graph</h2>
+    <div class="topology-legend">
+      <span class="topology-dot status-dot status-dot-muted"></span> Idle
+      <span class="topology-dot status-dot status-dot-warning"></span> Running
+      <span class="topology-dot status-dot status-dot-success"></span> Completed
+      <span class="topology-dot status-dot status-dot-danger"></span> Failed
     </div>
-    <div class="topology-controls">
-      <button id="topology-zoom-in" title="Zoom In">+</button>
-      <button id="topology-zoom-out" title="Zoom Out">-</button>
-      <button id="topology-reset" title="Reset View">⟲</button>
-    </div>
-    <div id="topology-empty" class="topology-empty-state"></div>
-    <svg id="topology-svg" class="topology-svg"></svg>
   `;
 
-  const svg = container.querySelector("#topology-svg") as SVGSVGElement;
+  const controls = document.createElement("div");
+  controls.className = "topology-controls";
+  const zoomInBtn = document.createElement("button");
+  zoomInBtn.id = "topology-zoom-in";
+  zoomInBtn.title = "Zoom In";
+  zoomInBtn.textContent = "+";
+  const zoomOutBtn = document.createElement("button");
+  zoomOutBtn.id = "topology-zoom-out";
+  zoomOutBtn.title = "Zoom Out";
+  zoomOutBtn.textContent = "-";
+  const resetBtn = document.createElement("button");
+  resetBtn.id = "topology-reset";
+  resetBtn.title = "Reset View";
+  resetBtn.textContent = "\u27F2";
+  controls.append(zoomInBtn, zoomOutBtn, resetBtn);
+
+  const emptyEl = document.createElement("div");
+  emptyEl.id = "topology-empty";
+  emptyEl.className = "topology-empty-state";
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.id = "topology-svg";
+  svg.classList.add("topology-svg");
+
+  graphPanel.append(headerEl, controls, emptyEl, svg);
+  shell.appendChild(graphPanel);
+  container.appendChild(shell);
 
   // Zoom / Pan state
   let scale = 1;
@@ -64,16 +103,14 @@ export function renderTopology(container: HTMLElement): void {
   }
 
   function updateEmptyState() {
-    const emptyEl = container.querySelector("#topology-empty") as HTMLElement;
-    const svgEl = container.querySelector("#topology-svg") as HTMLElement;
     if (!hasActiveTopology()) {
       emptyEl.innerHTML = "";
       emptyEl.appendChild(createEmptyState("icon-topology", "No Active Topology", "Multi-agent delegation appears here when a complex task triggers sub-agents."));
       emptyEl.classList.remove('invisible');
-      svgEl.classList.add('invisible');
+      svg.classList.add('invisible');
     } else {
       emptyEl.classList.add('invisible');
-      svgEl.classList.remove('invisible');
+      svg.classList.remove('invisible');
     }
   }
 
@@ -134,15 +171,15 @@ export function renderTopology(container: HTMLElement): void {
   renderTopologyGraphWithTransform(svg);
 
   // Zoom controls
-  container.querySelector("#topology-zoom-in")!.addEventListener("click", () => {
+  zoomInBtn.addEventListener("click", () => {
     scale = Math.min(scale * 1.2, 4);
     updateTransform();
   });
-  container.querySelector("#topology-zoom-out")!.addEventListener("click", () => {
+  zoomOutBtn.addEventListener("click", () => {
     scale = Math.max(scale / 1.2, 0.25);
     updateTransform();
   });
-  container.querySelector("#topology-reset")!.addEventListener("click", () => {
+  resetBtn.addEventListener("click", () => {
     scale = 1;
     panX = 0;
     panY = 0;

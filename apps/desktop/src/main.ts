@@ -17,7 +17,7 @@ function createWindow(): void {
     mainWindow = null;
     setMainWindow(null);
   });
-  mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
 app.whenReady().then(async () => {

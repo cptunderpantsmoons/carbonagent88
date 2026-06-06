@@ -298,7 +298,6 @@ describe("Schema Validation", () => {
             id: "550e8400-e29b-41d4-a716-446655440000",
             type: "anthropic",
             name: "Claude",
-            apiKey: "sk-ant-1234",
             model: "claude-sonnet-4-20250514",
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),

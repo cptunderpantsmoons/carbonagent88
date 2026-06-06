@@ -80,26 +80,50 @@ function renderTreeNode(node: AXTreeNode, container: HTMLElement, depth = 0) {
 }
 
 export function renderAXTree(container: HTMLElement): void {
-  container.innerHTML = `
-    <div class="axtree-header">
-      <h2>AXTree Inspector</h2>
-      <span class="axtree-status" id="axtree-status">No data</span>
-    </div>
-    <div id="axtree-empty" class="axtree-empty"></div>
-    <div class="axtree-body" id="axtree-body"></div>
-  `;
+  container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack axtree-shell";
 
-  const body = container.querySelector("#axtree-body") as HTMLElement;
-  const empty = container.querySelector("#axtree-empty") as HTMLElement;
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">AXTree Inspector</div>
+    <div class="view-hero-title">Inspect the semantic accessibility tree of a browser session.</div>
+    <div class="view-hero-copy">Lock a browser profile to see the live AXTree. Click any node to copy its Playwright selector for use in orchestration prompts.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Role badges</span><span>Copy selectors</span><span>Active node</span><span>Live updates</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const treePanel = document.createElement("section");
+  treePanel.className = "view-panel";
+
+  const headerEl = document.createElement("div");
+  headerEl.className = "axtree-header";
+  headerEl.innerHTML = `<h2>Accessibility Tree</h2><span class="axtree-status" id="axtree-status">No data</span>`;
+
+  const emptyEl = document.createElement("div");
+  emptyEl.id = "axtree-empty";
+  emptyEl.className = "axtree-empty";
+
+  const body = document.createElement("div");
+  body.className = "axtree-body";
+  body.id = "axtree-body";
+
+  treePanel.append(headerEl, emptyEl, body);
+  shell.appendChild(treePanel);
+  container.appendChild(shell);
 
   function updateEmptyState() {
     if (!hasReceivedAXTreeData) {
-      empty.innerHTML = "";
-      empty.appendChild(createEmptyState("icon-axtree", "No AXTree Data", "Lock a browser profile to inspect the semantic accessibility tree."));
-      empty.classList.remove('invisible');
+      emptyEl.innerHTML = "";
+      emptyEl.appendChild(createEmptyState("icon-axtree", "No AXTree Data", "Lock a browser profile to inspect the semantic accessibility tree."));
+      emptyEl.classList.remove('invisible');
       body.classList.add('invisible');
     } else {
-      empty.classList.add('invisible');
+      emptyEl.classList.add('invisible');
       body.classList.remove('invisible');
     }
   }
@@ -112,7 +136,7 @@ export function renderAXTree(container: HTMLElement): void {
   updateEmptyState();
 
   if (!window.carbonAPI.onAXTree) {
-    const statusEl = container.querySelector("#axtree-status") as HTMLElement | null;
+    const statusEl = headerEl.querySelector(".axtree-status") as HTMLElement | null;
     if (statusEl) statusEl.textContent = "Live AXTree unavailable";
     return;
   }
@@ -122,7 +146,7 @@ export function renderAXTree(container: HTMLElement): void {
     hasReceivedAXTreeData = true;
     currentTree = typed.tree;
     activeNodeId = typed.activeNodeId ?? "";
-    const status = container.querySelector("#axtree-status") as HTMLElement;
+    const status = headerEl.querySelector(".axtree-status") as HTMLElement;
     status.textContent = activeNodeId ? `Active: ${activeNodeId}` : "No active node";
     updateEmptyState();
     refresh();

@@ -2,9 +2,9 @@ import initSqlJs from "sql.js";
 import type { Database, SqlJsStatic } from "sql.js";
 import path from "node:path";
 import fs from "node:fs";
-import { getDatabasePath } from "./paths";
+import { getDatabasePath } from "./paths.js";
 import { fileURLToPath } from "node:url";
-import { encrypt, decrypt } from "./crypto";
+import { encrypt, decrypt } from "./crypto.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

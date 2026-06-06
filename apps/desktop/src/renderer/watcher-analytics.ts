@@ -162,25 +162,50 @@ function renderBarChart(svg: SVGSVGElement, labels: string[], values: number[], 
 }
 
 export function renderWatcherAnalytics(container: HTMLElement): void {
-  container.innerHTML = `
-    <div class="analytics-header"><h2>Watcher Analytics</h2></div>
-    <div id="analytics-empty" class="analytics-empty"></div>
-    <div class="analytics-grid" id="analytics-grid">
-      <div class="analytics-card">
-        <div class="analytics-title">Execution Time (ms)</div>
-        <svg id="analytics-time-chart" class="analytics-chart"></svg>
-      </div>
-      <div class="analytics-card">
-        <div class="analytics-title">Success / Fail Ratio</div>
-        <svg id="analytics-ratio-chart" class="analytics-chart"></svg>
-      </div>
-    </div>
-  `;
+  container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack analytics-shell";
 
-  const timeSvg = container.querySelector("#analytics-time-chart") as SVGSVGElement;
-  const ratioSvg = container.querySelector("#analytics-ratio-chart") as SVGSVGElement;
-  const empty = container.querySelector("#analytics-empty") as HTMLElement;
-  const grid = container.querySelector("#analytics-grid") as HTMLElement;
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Watcher Analytics</div>
+    <div class="view-hero-title">Execution metrics for background watchers.</div>
+    <div class="view-hero-copy">Charts update in real time when watcher runs complete. Execution times and success/fail ratios are tracked per watcher.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Execution time</span><span>Success ratio</span><span>SVG charts</span><span>Live data</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const empty = document.createElement("div");
+  empty.id = "analytics-empty";
+  empty.className = "analytics-empty";
+
+  const grid = document.createElement("div");
+  grid.className = "analytics-grid";
+  grid.id = "analytics-grid";
+
+  const timeCard = document.createElement("div");
+  timeCard.className = "analytics-card";
+  timeCard.innerHTML = `<div class="analytics-title">Execution Time (ms)</div>`;
+  const timeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  timeSvg.id = "analytics-time-chart";
+  timeSvg.classList.add("analytics-chart");
+  timeCard.appendChild(timeSvg);
+
+  const ratioCard = document.createElement("div");
+  ratioCard.className = "analytics-card";
+  ratioCard.innerHTML = `<div class="analytics-title">Success / Fail Ratio</div>`;
+  const ratioSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  ratioSvg.id = "analytics-ratio-chart";
+  ratioSvg.classList.add("analytics-chart");
+  ratioCard.appendChild(ratioSvg);
+
+  grid.append(timeCard, ratioCard);
+  shell.append(hero, empty, grid);
+  container.appendChild(shell);
 
   function refresh() {
     if (runs.length === 0) {

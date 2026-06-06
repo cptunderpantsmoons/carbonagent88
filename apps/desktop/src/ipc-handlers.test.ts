@@ -5,9 +5,14 @@ import os from "node:os";
 
 const mockState = vi.hoisted(() => ({
   registeredHandler: undefined as ((event: unknown, request: unknown) => Promise<unknown>) | undefined,
+  sessionCancel: vi.fn(),
+  resolveSessionRun: undefined as ((value: { runStatus: "completed"; fullResponse: string; runId: string }) => void) | undefined,
 }));
 
 const mockDb = {
+  listProviders: vi.fn(),
+  createProvider: vi.fn().mockResolvedValue(undefined),
+  getProvider: vi.fn(),
   listDocuments: vi.fn(),
   listSkills: vi.fn(),
   createOrchestrationSession: vi.fn().mockResolvedValue(undefined),
@@ -26,10 +31,12 @@ const mockDb = {
   }),
   listSessionEvents: vi.fn().mockResolvedValue([]),
   getSessionWorkingSet: vi.fn().mockResolvedValue(undefined),
+  countRunningRuns: vi.fn().mockResolvedValue(0),
   getRun: vi.fn().mockResolvedValue({
     id: "550e8400-e29b-41d4-a716-446655440023",
     provider_id: "550e8400-e29b-41d4-a716-446655440024",
   }),
+  updateRunStatus: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock("electron", () => ({
@@ -61,15 +68,19 @@ vi.mock("@carbon-agent/local-store", () => ({
   dbDeleteModelRole: vi.fn().mockResolvedValue(undefined),
   dbGetModelRole: vi.fn().mockResolvedValue(undefined),
   CarbonDatabase: class {
+    listProviders = mockDb.listProviders;
+    createProvider = mockDb.createProvider;
+    getProvider = mockDb.getProvider;
     listDocuments = mockDb.listDocuments;
     listSkills = mockDb.listSkills;
     getProviderWithKey = vi.fn();
-    getProvider = vi.fn();
     createOrchestrationSession = mockDb.createOrchestrationSession;
     getOrchestrationSession = mockDb.getOrchestrationSession;
     listSessionEvents = mockDb.listSessionEvents;
     getSessionWorkingSet = mockDb.getSessionWorkingSet;
+    countRunningRuns = mockDb.countRunningRuns;
     getRun = mockDb.getRun;
+    updateRunStatus = mockDb.updateRunStatus;
     updateOrchestrationSessionStatus = vi.fn().mockResolvedValue(undefined);
   },
 }));
@@ -88,13 +99,15 @@ vi.mock("./document-generator.js", () => ({
   generateDocument: vi.fn().mockResolvedValue({ filePath: "/tmp/carbon-documents/out.md", finalContent: "content" }),
 }));
 
+const runAgentMock = vi.hoisted(() => vi.fn().mockResolvedValue({ runStatus: "completed", fullResponse: "done", runId: "run-1" }));
 vi.mock("./agent-runner.js", () => ({
-  runAgent: vi.fn().mockResolvedValue({ runStatus: "completed", fullResponse: "done", runId: "run-1" }),
+  runAgent: runAgentMock,
 }));
 
 vi.mock("./session-events.js", () => ({
   emitSessionUpdate: vi.fn(),
   emitSessionWorkingSet: vi.fn(),
+  emitSessionEvent: vi.fn(),
 }));
 
 vi.mock("./watcher-manager.js", () => ({
@@ -110,8 +123,82 @@ import "./ipc-handlers.js";
 
 describe("ipc-handlers real routes", () => {
   beforeEach(() => {
+    mockState.sessionCancel.mockReset();
+    mockState.resolveSessionRun = undefined;
+    runAgentMock.mockReset();
+    runAgentMock.mockResolvedValue({ runStatus: "completed", fullResponse: "done", runId: "run-1" });
+    mockDb.listProviders.mockReset();
+    mockDb.createProvider.mockReset();
+    mockDb.createProvider.mockResolvedValue(undefined);
+    mockDb.getProvider.mockReset();
+    mockDb.updateRunStatus.mockReset();
+    mockDb.updateRunStatus.mockResolvedValue(undefined);
+    mockDb.countRunningRuns.mockReset();
+    mockDb.countRunningRuns.mockResolvedValue(0);
     mockDb.listDocuments.mockReset();
     mockDb.listSkills.mockReset();
+  });
+
+  it("returns public camelCase provider records", async () => {
+    mockDb.listProviders.mockResolvedValue([
+      {
+        id: "550e8400-e29b-41d4-a716-446655440010",
+        type: "custom-openai",
+        name: "Umans Fast",
+        base_url: "https://llm.example.test/v1",
+        model: "umans-fast",
+        created_at: "2026-06-06T00:00:00.000Z",
+        updated_at: "2026-06-06T00:00:00.000Z",
+      },
+    ]);
+
+    const response = await mockState.registeredHandler?.({}, { type: "provider/list" });
+
+    expect(response).toEqual({
+      type: "provider/list.success",
+      data: [{
+        id: "550e8400-e29b-41d4-a716-446655440010",
+        type: "custom-openai",
+        name: "Umans Fast",
+        baseUrl: "https://llm.example.test/v1",
+        model: "umans-fast",
+        createdAt: "2026-06-06T00:00:00.000Z",
+        updatedAt: "2026-06-06T00:00:00.000Z",
+      }],
+    });
+  });
+
+  it("returns the created provider under data", async () => {
+    mockDb.getProvider.mockResolvedValue({
+      id: "550e8400-e29b-41d4-a716-446655440011",
+      type: "openai",
+      name: "OpenAI",
+      base_url: null,
+      model: "gpt-4.1",
+      created_at: "2026-06-06T00:00:00.000Z",
+      updated_at: "2026-06-06T00:00:00.000Z",
+    });
+
+    const response = await mockState.registeredHandler?.({}, {
+      type: "provider/create",
+      data: {
+        type: "openai",
+        name: "OpenAI",
+        apiKey: "sk-test",
+        model: "gpt-4.1",
+      },
+    });
+
+    expect(response).toMatchObject({
+      type: "provider/create.success",
+      data: {
+        id: "550e8400-e29b-41d4-a716-446655440011",
+        type: "openai",
+        name: "OpenAI",
+        baseUrl: undefined,
+        model: "gpt-4.1",
+      },
+    });
   });
 
   it("lists vault files from the selected workspace directory", async () => {
@@ -221,5 +308,36 @@ describe("ipc-handlers real routes", () => {
     const workingSet = await mockState.registeredHandler?.({}, { type: "session/working-set", id: "550e8400-e29b-41d4-a716-446655440022" });
     expect(events).toMatchObject({ type: "session/events.success" });
     expect(workingSet).toMatchObject({ type: "session/working-set.success" });
+  });
+
+  it("registers a running orchestration session so it can be cancelled", async () => {
+    runAgentMock.mockImplementationOnce(async (input: { onRuntime?: (runtime: { cancel(): void }) => void }) => {
+      input.onRuntime?.({ cancel: mockState.sessionCancel });
+      return await new Promise<{ runStatus: "completed"; fullResponse: string; runId: string }>((resolve) => {
+        mockState.resolveSessionRun = resolve;
+      });
+    });
+
+    const startPromise = mockState.registeredHandler?.({}, {
+      type: "session/start",
+      id: "550e8400-e29b-41d4-a716-446655440022",
+    });
+
+    let stats: unknown;
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+      stats = await mockState.registeredHandler?.({}, { type: "stats/list" });
+      if ((stats as { activeRuns?: number } | undefined)?.activeRuns === 1) break;
+    }
+    expect(stats).toMatchObject({ type: "stats/list.success", activeRuns: 1 });
+
+    await mockState.registeredHandler?.({}, {
+      type: "run/cancel",
+      id: "550e8400-e29b-41d4-a716-446655440023",
+    });
+
+    expect(mockState.sessionCancel).toHaveBeenCalledTimes(1);
+    mockState.resolveSessionRun?.({ runStatus: "completed", fullResponse: "done", runId: "550e8400-e29b-41d4-a716-446655440023" });
+    await startPromise;
   });
 });

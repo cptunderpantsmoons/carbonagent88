@@ -2,7 +2,7 @@ import { createEmptyState } from "./components.js";
 import { Toast, Modal } from "./ui-components.js";
 
 export type WorkspaceRecord = { id: string; name: string; description?: string; vault_dir?: string; vaultDir?: string };
-export type ProviderRecord = { id: string; name: string; type: string; model?: string; api_key?: string; base_url?: string; created_at?: string; updated_at?: string };
+export type ProviderRecord = { id: string; name: string; type: string; model?: string; baseUrl?: string; createdAt?: string; updatedAt?: string };
 export type ProfileRecord = {
   id: string;
   name: string;
@@ -14,6 +14,11 @@ export type ProfileRecord = {
   last_checked_at?: string;
   last_run_at?: string;
 };
+type ErrorResponse = { type: "error"; error: string; code?: string };
+type WorkspaceListResponse = { type: "workspace/list.success"; data: WorkspaceRecord[] } | ErrorResponse;
+type ProviderListResponse = { type: "provider/list.success"; data: ProviderRecord[] } | ErrorResponse;
+type ProfileListResponse = { type: "profile/list.success"; data: ProfileRecord[] } | ErrorResponse;
+type RunEventsResponse = { type: "run/events.success"; events: unknown[] } | ErrorResponse;
 
 export const appState = {
   currentConversationId: null as string | null,
@@ -218,7 +223,7 @@ export function setProviderLabel(label: string): void {
 }
 
 export async function loadWorkspaces(): Promise<WorkspaceRecord[]> {
-  const resp = await window.carbonAPI.invoke({ type: "workspace/list" } as any) as any;
+  const resp = await window.carbonAPI.invoke({ type: "workspace/list" }) as WorkspaceListResponse;
   if (resp.type === "workspace/list.success") {
     appState.workspaces = resp.data;
     if (!appState.currentWorkspaceId && appState.workspaces.length > 0) {
@@ -232,7 +237,7 @@ export async function loadWorkspaces(): Promise<WorkspaceRecord[]> {
 }
 
 export async function loadProviders(): Promise<ProviderRecord[]> {
-  const resp = await window.carbonAPI.invoke({ type: "provider/list" } as any) as any;
+  const resp = await window.carbonAPI.invoke({ type: "provider/list" }) as ProviderListResponse;
   if (resp.type === "provider/list.success") {
     appState.providers = resp.data;
   }
@@ -240,7 +245,7 @@ export async function loadProviders(): Promise<ProviderRecord[]> {
 }
 
 export async function loadProfiles(): Promise<ProfileRecord[]> {
-  const resp = await window.carbonAPI.invoke({ type: "profile/list" } as any) as any;
+  const resp = await window.carbonAPI.invoke({ type: "profile/list" }) as ProfileListResponse;
   if (resp.type === "profile/list.success") {
     appState.profileList = resp.data;
   }
@@ -257,7 +262,7 @@ export async function openRunInspector(runId: string): Promise<void> {
   body.innerHTML = '<div class="skeleton skeleton-block"></div>';
 
   try {
-    const resp = await window.carbonAPI.invoke({ type: "run/events", id: runId } as any) as any;
+    const resp = await window.carbonAPI.invoke({ type: "run/events", id: runId }) as RunEventsResponse;
     if (resp.type !== "run/events.success") {
       body.innerHTML = `<p class="text-danger">Error: ${escapeHtml(resp.error || "Failed to load run events")}</p>`;
       return;
@@ -340,6 +345,6 @@ export function closeLiveViewport(): void {
   }
   // Stop telemetry timers on the main process
   if (appState.currentProfileId) {
-    void window.carbonAPI.invoke({ type: "viewport/stop", profileId: appState.currentProfileId } as any);
+    void window.carbonAPI.invoke({ type: "viewport/stop", profileId: appState.currentProfileId });
   }
 }

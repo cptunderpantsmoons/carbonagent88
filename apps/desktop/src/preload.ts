@@ -10,6 +10,7 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRequest, IpcResponse } from "@carbon-agent/shared-schemas";
+import type { SessionEvent } from "@carbon-agent/shared-schemas";
 import type { DesktopAXTreeNode, DesktopTopologyEdge, DesktopTopologyNode, DesktopViewportFrame, DesktopWatcherRun } from "./desktop-events.js";
 
 export interface CarbonAPI {
@@ -21,6 +22,7 @@ export interface CarbonAPI {
   onVaultChange?: (callback: (data: { workspaceId: string; filePath: string; content: string }) => void) => () => void;
   onSessionUpdate?: (callback: (data: { sessionId: string; status: string; currentGoal: string }) => void) => () => void;
   onSessionWorkingSet?: (callback: (data: { sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }) => void) => () => void;
+  onSessionEvent?: (callback: (data: { sessionId: string; event: SessionEvent }) => void) => () => void;
 }
 
 function createListener<T>(channel: string) {
@@ -43,6 +45,7 @@ const api: CarbonAPI = {
   onVaultChange: createListener<{ workspaceId: string; filePath: string; content: string }>("carbon-event:vault-change"),
   onSessionUpdate: createListener<{ sessionId: string; status: string; currentGoal: string }>("carbon-event:session-update"),
   onSessionWorkingSet: createListener<{ sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }>("carbon-event:session-working-set"),
+  onSessionEvent: createListener<{ sessionId: string; event: SessionEvent }>("carbon-event:session-event"),
 };
 
 contextBridge.exposeInMainWorld("carbonAPI", api);

@@ -14,12 +14,30 @@ import {
 
 export function renderPlayground(container: HTMLElement): void {
   container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack playground-shell";
+
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Playground</div>
+    <div class="view-hero-title">Launch a session with a clean, controlled setup.</div>
+    <div class="view-hero-copy">Pick a workspace, choose a provider, and define the thread details before the session starts. The layout keeps the launch controls separate from the transcript so the flow stays readable.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Workspace</span><span>Provider</span><span>Supervision</span><span>Transcript</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const launchCard = document.createElement("section");
+  launchCard.className = "view-panel";
 
   const header = document.createElement("div");
-  header.className = "session-header";
+  header.className = "view-toolbar";
 
   const sessionInfo = document.createElement("div");
-  sessionInfo.className = "session-info";
+  sessionInfo.className = "view-toolbar-group";
 
   const wsSelect = document.createElement("select");
   wsSelect.className = "form-select session-select";
@@ -40,6 +58,7 @@ export function renderPlayground(container: HTMLElement): void {
   const resetBtn = createButton("New Session", "secondary", "sm");
   sessionInfo.append(wsSelect, provSelect, supervisionSelect, resetBtn);
   header.appendChild(sessionInfo);
+  launchCard.appendChild(header);
 
   const launchGrid = document.createElement("div");
   launchGrid.className = "session-launch-grid";
@@ -59,13 +78,22 @@ export function renderPlayground(container: HTMLElement): void {
     buildField("Thread ID / fragment", threadIdInput, "The thread identifier or URL fragment."),
     buildField("Mailbox", mailboxInput, "The source mailbox to inspect."),
   );
-
   const chips = document.createElement("div");
   chips.className = "task-chips";
   const suggestions = ["Collect reporting inputs", "Trace the latest invoice thread", "Validate supporting evidence"];
-  header.appendChild(chips);
-  container.append(header, launchGrid);
+  launchCard.append(launchGrid, chips);
+  shell.appendChild(launchCard);
 
+  const transcriptCard = document.createElement("section");
+  transcriptCard.className = "view-panel";
+  const transcriptHeader = document.createElement("div");
+  transcriptHeader.className = "view-panel-header";
+  transcriptHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">Transcript</div>
+      <div class="view-panel-copy">Session progress and responses appear here after launch.</div>
+    </div>
+  `;
   const chatContainer = document.createElement("div");
   chatContainer.className = "chat-container playground-chat";
   const messages = document.createElement("div");
@@ -76,7 +104,9 @@ export function renderPlayground(container: HTMLElement): void {
   const startBtn = createButton("Start Session", "primary");
   inputBar.append(startBtn);
   chatContainer.append(messages, inputBar);
-  container.appendChild(chatContainer);
+  transcriptCard.append(transcriptHeader, chatContainer);
+  shell.appendChild(transcriptCard);
+  container.appendChild(shell);
 
   for (const suggestion of suggestions) {
     const chip = document.createElement("button");

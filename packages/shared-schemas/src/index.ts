@@ -37,6 +37,10 @@ export const AIProviderConfigSchema = z.object({
 
 export type AIProviderConfig = z.infer<typeof AIProviderConfigSchema>;
 
+export const AIProviderPublicSchema = AIProviderConfigSchema.omit({ apiKey: true });
+
+export type AIProviderPublic = z.infer<typeof AIProviderPublicSchema>;
+
 // ---------------------------------------------------------------------------
 // Browser Profile
 // ---------------------------------------------------------------------------
@@ -623,9 +627,9 @@ export const SessionWorkingSetSuccessSchema = z.object({
 
 export const IpcResponseSchema = z.discriminatedUnion("type", [
   // Success wrappers
-  z.object({ type: z.literal("provider/list.success"), data: z.array(AIProviderConfigSchema) }),
-  z.object({ type: z.literal("provider/create.success"), data: AIProviderConfigSchema }),
-  z.object({ type: z.literal("provider/update.success"), data: AIProviderConfigSchema }),
+  z.object({ type: z.literal("provider/list.success"), data: z.array(AIProviderPublicSchema) }),
+  z.object({ type: z.literal("provider/create.success"), data: AIProviderPublicSchema }),
+  z.object({ type: z.literal("provider/update.success"), data: AIProviderPublicSchema }),
   z.object({ type: z.literal("provider/delete.success") }),
   z.object({ type: z.literal("provider/test.success"), status: z.string() }),
   z.object({ type: z.literal("profile/list.success"), data: z.array(BrowserProfileSchema) }),

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
-import type { ChatRequest, ChatResponse, StreamChunk, LLMProvider } from "../gateway";
+import type { ChatRequest, ChatResponse, StreamChunk, LLMProvider } from "../gateway.js";
 
 /**
  * Custom OpenAI-compatible Provider

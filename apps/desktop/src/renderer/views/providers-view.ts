@@ -15,42 +15,87 @@ import {
   loadProviders,
 } from "../view-helpers.js";
 
+type ProviderType = "anthropic" | "openai" | "custom-openai";
+type ModelRoleName = "assistant" | "planner" | "browser" | "knowledge-graph" | "validator" | "judge" | "coder" | "meeting-notes";
+type ErrorResponse = { type: "error"; error: string; code?: string };
+type ModelRolesListResponse = { type: "model-roles/list.success"; data: Array<{ role: string; providerId: string }> } | ErrorResponse;
+type ModelRolesSetResponse = { type: "model-roles/set.success"; data: unknown } | ErrorResponse;
+type ProviderTestResponse = { type: "provider/test.success"; status: string } | ErrorResponse;
+type ProviderCreateResponse = { type: "provider/create.success"; data: ProviderRecord } | ErrorResponse;
+
 export function renderProviders(container: HTMLElement): void {
   container.innerHTML = "";
 
+  const shell = document.createElement("div");
+  shell.className = "view-stack providers-shell";
+
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">AI Providers</div>
+    <div class="view-hero-title">Configure providers and role assignments in one place.</div>
+    <div class="view-hero-copy">The list stays compact, the details stay visible, and the role map stays below the fold so the page remains readable at a glance.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Provider list</span><span>Detail pane</span><span>Role mapping</span><span>Secure keys</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
   const layout = document.createElement("div");
-  layout.className = "two-col-layout";
+  layout.className = "two-col-layout providers-layout";
 
   const leftPanel = document.createElement("div");
   leftPanel.className = "two-col-left";
+  const leftCard = document.createElement("section");
+  leftCard.className = "view-panel providers-list-card";
   const header = document.createElement("div");
-  header.className = "flex gap-2 mb-12";
-  header.innerHTML = '<span class="two-col-title">AI Providers</span>';
+  header.className = "view-panel-header";
+  header.innerHTML = `
+    <div>
+      <div class="view-panel-title">Providers</div>
+      <div class="view-panel-copy">Select a provider to inspect its configuration or add a new one.</div>
+    </div>
+  `;
   const addBtn = createButton("+ Add", "secondary", "sm");
+  addBtn.className = "btn btn-secondary btn-sm";
   header.appendChild(addBtn);
-  leftPanel.appendChild(header);
+  leftCard.appendChild(header);
 
   const listEl = document.createElement("div");
   listEl.className = "list";
   listEl.id = "provider-list";
-  leftPanel.appendChild(listEl);
+  leftCard.appendChild(listEl);
+  leftPanel.appendChild(leftCard);
 
   const rightPanel = document.createElement("div");
   rightPanel.className = "two-col-right";
   rightPanel.id = "provider-detail";
+  const rightCard = document.createElement("section");
+  rightCard.className = "view-panel";
+  rightCard.appendChild(rightPanel);
+  rightPanel.classList.add("providers-detail");
 
-  layout.append(leftPanel, rightPanel);
-  container.appendChild(layout);
+  layout.append(leftPanel, rightCard);
+  shell.appendChild(layout);
 
   // Model Roles Section
-  const rolesSection = document.createElement("div");
-  rolesSection.className = "model-roles-section mt-24";
-  rolesSection.innerHTML = '<h3 class="section-title">Model Roles</h3><p class="section-desc">Assign specialized providers to agent roles for optimized performance.</p>';
+  const rolesSection = document.createElement("section");
+  rolesSection.className = "view-panel model-roles-section providers-roles";
+  rolesSection.innerHTML = `
+    <div class="view-panel-header">
+      <div>
+        <div class="view-panel-title">Model Roles</div>
+        <div class="view-panel-copy">Assign specialized providers to agent roles for the orchestration runtime.</div>
+      </div>
+    </div>
+  `;
   const rolesGrid = document.createElement("div");
   rolesGrid.className = "model-roles-grid";
   rolesGrid.id = "model-roles-grid";
   rolesSection.appendChild(rolesGrid);
-  container.appendChild(rolesSection);
+  shell.appendChild(rolesSection);
+  container.appendChild(shell);
 
   addBtn.addEventListener("click", () => showProviderCreateForm(rightPanel));
   showProviderDetail(rightPanel, null);
@@ -59,14 +104,14 @@ export function renderProviders(container: HTMLElement): void {
 }
 
 const ROLE_DEFINITIONS = [
-  { role: "assistant" as const, label: "Assistant", desc: "General conversations and task coordination" },
-  { role: "planner" as const, label: "Planner", desc: "Breaks goals into stages and sequences" },
-  { role: "browser" as const, label: "Browser", desc: "Executes browser work and evidence collection" },
-  { role: "knowledge-graph" as const, label: "Knowledge Graph", desc: "Connects entities and source context" },
-  { role: "validator" as const, label: "Validator", desc: "Checks evidence quality and completeness" },
-  { role: "judge" as const, label: "Judge", desc: "Decides whether a session can close" },
-  { role: "coder" as const, label: "Coder", desc: "Code generation, editing, and debugging" },
-  { role: "meeting-notes" as const, label: "Meeting Notes", desc: "Summarization and note generation" },
+  { role: "assistant", label: "Assistant", desc: "General conversations and task coordination" },
+  { role: "planner", label: "Planner", desc: "Breaks goals into stages and sequences" },
+  { role: "browser", label: "Browser", desc: "Executes browser work and evidence collection" },
+  { role: "knowledge-graph", label: "Knowledge Graph", desc: "Connects entities and source context" },
+  { role: "validator", label: "Validator", desc: "Checks evidence quality and completeness" },
+  { role: "judge", label: "Judge", desc: "Decides whether a session can close" },
+  { role: "coder", label: "Coder", desc: "Code generation, editing, and debugging" },
+  { role: "meeting-notes", label: "Meeting Notes", desc: "Summarization and note generation" },
 ];
 
 async function renderModelRoles(grid: HTMLElement): Promise<void> {
@@ -78,9 +123,9 @@ async function renderModelRoles(grid: HTMLElement): Promise<void> {
 
   if (wsId) {
     try {
-      const resp = await window.carbonAPI.invoke({ type: "model-roles/list", workspaceId: wsId } as any) as any;
+      const resp = await window.carbonAPI.invoke({ type: "model-roles/list", workspaceId: wsId }) as ModelRolesListResponse;
       if (resp.type === "model-roles/list.success") {
-        currentRoles = (resp.data as any[]) ?? [];
+        currentRoles = resp.data.map((role) => ({ role: role.role, providerId: role.providerId }));
       }
     } catch { /* ignore */ }
   }
@@ -114,17 +159,17 @@ async function renderModelRoles(grid: HTMLElement): Promise<void> {
       if (select.value) {
         const resp = await window.carbonAPI.invoke({
           type: "model-roles/set",
-          data: { role: def.role, providerId: select.value, workspaceId: wsId },
-        } as any) as any;
+          data: { role: def.role as ModelRoleName, providerId: select.value, workspaceId: wsId },
+        } as Record<string, unknown>) as ModelRolesSetResponse;
         if (resp.type === "model-roles/set.success") {
           Toast.show(`${def.label} role updated`, "success");
         }
       } else if (assigned) {
         await window.carbonAPI.invoke({
           type: "model-roles/delete",
-          role: def.role,
+          role: def.role as ModelRoleName,
           workspaceId: wsId,
-        } as any);
+        } as Record<string, unknown>);
         Toast.show(`${def.label} role cleared`, "success");
       }
       void renderModelRoles(grid);
@@ -141,7 +186,6 @@ function showProviderDetail(panel: HTMLElement, provider: ProviderRecord | null)
     return;
   }
 
-  const maskedKey = provider.api_key ? `${provider.api_key.slice(0, 6)}...${provider.api_key.slice(-4)}` : "—";
   panel.innerHTML = `
     <div class="provider-detail-card">
       <div class="provider-detail-header">
@@ -152,13 +196,13 @@ function showProviderDetail(panel: HTMLElement, provider: ProviderRecord | null)
         <div class="inspector-section-title">Configuration</div>
         <div class="inspector-row"><span class="label">Type</span><span class="value">${escapeHtml(provider.type)}</span></div>
         <div class="inspector-row"><span class="label">Model</span><span class="value">${escapeHtml(provider.model || "—")}</span></div>
-        <div class="inspector-row"><span class="label">API Key</span><span class="value font-11">${escapeHtml(maskedKey)}</span></div>
-        ${provider.base_url ? `<div class="inspector-row"><span class="label">Base URL</span><span class="value font-11">${escapeHtml(provider.base_url)}</span></div>` : ""}
+        <div class="inspector-row"><span class="label">API Key</span><span class="value font-11">Stored securely</span></div>
+        ${provider.baseUrl ? `<div class="inspector-row"><span class="label">Base URL</span><span class="value font-11">${escapeHtml(provider.baseUrl)}</span></div>` : ""}
       </div>
       <div class="inspector-section">
         <div class="inspector-section-title">Metadata</div>
-        <div class="inspector-row"><span class="label">Created</span><span class="value">${provider.created_at ? new Date(provider.created_at).toLocaleDateString() : "—"}</span></div>
-        <div class="inspector-row"><span class="label">Updated</span><span class="value">${provider.updated_at ? new Date(provider.updated_at).toLocaleDateString() : "—"}</span></div>
+        <div class="inspector-row"><span class="label">Created</span><span class="value">${provider.createdAt ? new Date(provider.createdAt).toLocaleDateString() : "—"}</span></div>
+        <div class="inspector-row"><span class="label">Updated</span><span class="value">${provider.updatedAt ? new Date(provider.updatedAt).toLocaleDateString() : "—"}</span></div>
       </div>
       <div class="provider-detail-actions">
         <button class="btn btn-secondary btn-sm" data-action="test">Test Connection</button>
@@ -168,7 +212,7 @@ function showProviderDetail(panel: HTMLElement, provider: ProviderRecord | null)
   `;
 
   panel.querySelector('[data-action="test"]')?.addEventListener("click", async () => {
-    const testResp = await window.carbonAPI.invoke({ type: "provider/test", id: provider.id } as any) as any;
+    const testResp = await window.carbonAPI.invoke({ type: "provider/test", id: provider.id }) as ProviderTestResponse;
     Toast.show(testResp.type === "provider/test.success" ? String(testResp.status) : String(testResp.error), testResp.type === "provider/test.success" ? "success" : "error");
   });
 
@@ -176,7 +220,7 @@ function showProviderDetail(panel: HTMLElement, provider: ProviderRecord | null)
     const confirmed = await Modal.confirm("Delete provider?", `Remove \"${provider.name}\"?`);
     if (!confirmed) return;
     try {
-      await window.carbonAPI.invoke({ type: "provider/delete", id: provider.id } as any);
+      await window.carbonAPI.invoke({ type: "provider/delete", id: provider.id });
       Toast.show("Provider deleted", "success");
       void renderProviderList();
       showProviderDetail(panel, null);
@@ -223,22 +267,23 @@ function showProviderCreateForm(panel: HTMLElement): void {
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving...";
     try {
+      const providerType = typeSelect.value as ProviderType;
       const resp = await window.carbonAPI.invoke({
         type: "provider/create",
         data: {
-          type: typeSelect.value,
+          type: providerType,
           name: nameInput.value.trim(),
           apiKey: keyInput.value.trim(),
-          baseUrl: typeSelect.value === "custom-openai" ? baseUrlInput.value.trim() || undefined : undefined,
+          baseUrl: providerType === "custom-openai" ? baseUrlInput.value.trim() || undefined : undefined,
           model: modelInput.value.trim(),
         },
-      } as any) as any;
+      }) as ProviderCreateResponse;
       if (resp.type === "error") {
         Toast.show(String(resp.error), "error");
       } else {
         Toast.show("Provider saved", "success");
         void renderProviderList();
-        showProviderDetail(panel, resp.provider || null);
+        showProviderDetail(panel, resp.data || null);
       }
     } catch (error: unknown) {
       Toast.show(`Error: ${error instanceof Error ? error.message : String(error)}`, "error");

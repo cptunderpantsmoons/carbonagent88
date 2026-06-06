@@ -2,7 +2,6 @@ import {
   Toast,
   appState,
   createButton,
-  createCard,
   createEmptyState,
   createFormGroup,
   createInput,
@@ -16,33 +15,45 @@ import {
 
 export function renderWatchers(container: HTMLElement): void {
   container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack watchers-shell";
 
-  const summaryCard = document.createElement("div");
-  summaryCard.className = "watcher-summary";
-  summaryCard.innerHTML = `
-    <div class="watcher-summary-title">Background Watchers</div>
-    <div class="watcher-summary-text">
-      Autonomous agents that execute on schedule. Each watcher runs a prompt against a workspace
-      using a configured browser profile. Status reflects the last execution outcome.
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Watchers</div>
+    <div class="view-hero-title">Autonomous agents that execute on schedule.</div>
+    <div class="view-hero-copy">Each watcher runs a prompt against a workspace using a configured browser profile. Status reflects the last execution outcome. Toggle, trigger, or inspect logs inline.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Cron scheduled</span><span>Browser profiles</span><span>Auto-retry</span><span>Run logs</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const listPanel = document.createElement("section");
+  listPanel.className = "view-panel";
+  const listHeader = document.createElement("div");
+  listHeader.className = "view-panel-header";
+  listHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">Active Watchers</div>
+      <div class="view-panel-copy">Background tasks running on cron schedules.</div>
     </div>
   `;
-  container.appendChild(summaryCard);
-
-  const listCard = createCard("Active Watchers");
   const listEl = document.createElement("div");
   listEl.id = "watcher-list";
-  listCard.appendChild(listEl);
-  container.appendChild(listCard);
+  listPanel.append(listHeader, listEl);
+  shell.appendChild(listPanel);
 
-  const addCard = document.createElement("div");
-  addCard.className = "card card-create";
-  const createTitle = document.createElement("div");
-  createTitle.className = "card-create-toggle";
-  createTitle.textContent = "+ Schedule New Watcher";
-  addCard.appendChild(createTitle);
+  const createPanel = document.createElement("section");
+  createPanel.className = "view-panel";
+  const createToggle = document.createElement("button");
+  createToggle.className = "btn btn-ghost btn-sm w-100";
+  createToggle.textContent = "+ Schedule New Watcher";
 
   const createForm = document.createElement("div");
-  createForm.className = "card-create-body invisible";
+  createForm.className = "toggle-group";
   const nameInput = createInput("e.g., Check Invoices");
   const promptInput = createInput("e.g., Check my SharePoint Pending folder and ingest new PDFs");
   const cronInput = createInput("*/60 * * * *");
@@ -58,12 +69,13 @@ export function renderWatchers(container: HTMLElement): void {
   );
 
   const saveBtn = createButton("Create Watcher", "primary");
-  saveBtn.className = "btn btn-primary w-100";
+  saveBtn.className = "btn btn-primary w-100 mt-8";
   createForm.appendChild(saveBtn);
-  addCard.appendChild(createForm);
-  container.appendChild(addCard);
+  createPanel.append(createToggle, createForm);
+  shell.appendChild(createPanel);
+  container.appendChild(shell);
 
-  createTitle.addEventListener("click", () => createForm.classList.toggle("invisible"));
+  createToggle.addEventListener("click", () => createForm.classList.toggle("visible"));
 
   void Promise.all([loadWorkspaces(), loadProfiles()]).then(([workspaces, profiles]) => {
     populateSelect(workspaceSelect, workspaces, (workspace) => workspace.name, "Select workspace...");

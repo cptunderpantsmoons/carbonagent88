@@ -7,7 +7,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
 echo "→ Building..."
-tsc --project tsconfig.json
+pnpm exec tsc --project tsconfig.json
 
 echo "→ Copying renderer assets..."
 cp src/renderer/styles.css dist/renderer/

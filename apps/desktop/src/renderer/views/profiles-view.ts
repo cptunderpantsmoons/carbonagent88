@@ -5,7 +5,6 @@ import {
   appState,
   createBadge,
   createButton,
-  createCard,
   createEmptyState,
   createFormGroup,
   createInput,
@@ -20,35 +19,46 @@ import {
 
 export function renderProfiles(container: HTMLElement): void {
   container.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "view-stack profiles-shell";
 
-  const explainer = document.createElement("div");
-  explainer.className = "explainer-block";
-  explainer.innerHTML = `
-    <div class="explainer-title">What is Cloak Bridge?</div>
-    <div class="explainer-text">
-      Browser profiles let the agent access authenticated web sessions on your behalf.
-      Use <strong>Login</strong> to open a browser for manual authentication,
-      <strong>Health</strong> to check session validity, and <strong>Watch</strong> to stream the live viewport.
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Cloak Bridge</div>
+    <div class="view-hero-title">Manage browser profiles for authenticated sessions.</div>
+    <div class="view-hero-copy">Each profile represents an isolated browser context. Use Login to authenticate manually, Health to check session validity, and Watch to stream the live viewport.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Local / Cloud</span><span>Login portal</span><span>Health checks</span><span>Live viewport</span>`;
+  hero.appendChild(heroMeta);
+  shell.appendChild(hero);
+
+  const listPanel = document.createElement("section");
+  listPanel.className = "view-panel";
+  const listHeader = document.createElement("div");
+  listHeader.className = "view-panel-header";
+  listHeader.innerHTML = `
+    <div>
+      <div class="view-panel-title">Browser Profiles</div>
+      <div class="view-panel-copy">Authenticated browser contexts for the orchestration runtime.</div>
     </div>
   `;
-  container.appendChild(explainer);
-
-  const listCard = createCard("Browser Profiles");
   const listEl = document.createElement("div");
   listEl.className = "list";
   listEl.id = "profile-list";
-  listCard.appendChild(listEl);
-  container.appendChild(listCard);
+  listPanel.append(listHeader, listEl);
+  shell.appendChild(listPanel);
 
-  const addCard = document.createElement("div");
-  addCard.className = "card card-create";
-  const toggle = document.createElement("div");
-  toggle.className = "card-create-toggle";
-  toggle.textContent = "+ Create New Profile";
-  addCard.appendChild(toggle);
+  const createPanel = document.createElement("section");
+  createPanel.className = "view-panel";
+  const createToggle = document.createElement("button");
+  createToggle.className = "btn btn-ghost btn-sm w-100";
+  createToggle.textContent = "+ Create New Profile";
 
   const form = document.createElement("div");
-  form.className = "card-create-body invisible";
+  form.className = "toggle-group";
   const nameInput = createInput("e.g., My Enterprise Account");
   const modeSelect = createSelect([
     { value: "local", label: "Local Browser (launch Chromium)" },
@@ -77,12 +87,13 @@ export function renderProfiles(container: HTMLElement): void {
   );
 
   const saveBtn = createButton("Create Profile", "primary");
-  saveBtn.className = "btn btn-primary w-100 mt-4";
+  saveBtn.className = "btn btn-primary w-100 mt-8";
   form.appendChild(saveBtn);
-  addCard.appendChild(form);
-  container.appendChild(addCard);
+  createPanel.append(createToggle, form);
+  shell.appendChild(createPanel);
+  container.appendChild(shell);
 
-  toggle.addEventListener("click", () => form.classList.toggle("invisible"));
+  createToggle.addEventListener("click", () => form.classList.toggle("visible"));
   modeSelect.addEventListener("change", () => {
     localFields.classList.toggle("visible", modeSelect.value === "local");
     cloudFields.classList.toggle("visible", modeSelect.value === "cloud");

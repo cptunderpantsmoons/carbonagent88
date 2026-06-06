@@ -83,9 +83,9 @@ export interface LLMProvider {
 // Provider factory
 // ---------------------------------------------------------------------------
 
-import { AnthropicProvider } from "./providers/anthropic";
-import { OpenAIProvider } from "./providers/openai";
-import { CustomOpenAIProvider } from "./providers/custom-openai";
+import { AnthropicProvider } from "./providers/anthropic.js";
+import { OpenAIProvider } from "./providers/openai.js";
+import { CustomOpenAIProvider } from "./providers/custom-openai.js";
 
 export function createProvider(config: AIProviderConfig): LLMProvider {
   switch (config.type) {

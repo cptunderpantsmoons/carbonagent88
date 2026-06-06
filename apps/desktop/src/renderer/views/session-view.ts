@@ -49,6 +49,10 @@ type SessionWorkingSet = {
   provenanceScore: number;
   updatedAt: string;
 };
+type ErrorResponse = { type: "error"; error: string; code?: string };
+type SessionGetResponse = { type: "session/get.success"; data: OrchestrationSession } | ErrorResponse;
+type SessionEventsResponse = { type: "session/events.success"; events: SessionEvent[] } | ErrorResponse;
+type SessionWorkingSetResponse = { type: "session/working-set.success"; data: SessionWorkingSet } | ErrorResponse;
 
 type SessionViewState = {
   session: OrchestrationSession | null;
@@ -94,6 +98,18 @@ export function renderSessionView(container: HTMLElement): void {
 
   const shell = document.createElement("div");
   shell.className = "session-shell";
+
+  const hero = document.createElement("section");
+  hero.className = "view-hero";
+  hero.innerHTML = `
+    <div class="view-hero-kicker">Session Inspector</div>
+    <div class="view-hero-title">Track the live orchestration session.</div>
+    <div class="view-hero-copy">The timeline, working set, and gap analysis update in real time as the session collects evidence and progresses toward its goal.</div>
+  `;
+  const heroMeta = document.createElement("div");
+  heroMeta.className = "view-hero-meta";
+  heroMeta.innerHTML = `<span>Timeline</span><span>Working set</span><span>Gaps</span><span>Provenance</span>`;
+  hero.appendChild(heroMeta);
 
   const header = document.createElement("div");
   header.className = "session-summary";
@@ -174,7 +190,7 @@ export function renderSessionView(container: HTMLElement): void {
 
   rightColumn.append(documentsPanel, gapsPanel);
   grid.append(timelinePanel, rightColumn);
-  shell.append(header, grid);
+  shell.append(hero, header, grid);
   container.appendChild(shell);
 
   const sessionStatusPill = meta.querySelector("#session-status-pill") as HTMLElement | null;
@@ -186,6 +202,7 @@ export function renderSessionView(container: HTMLElement): void {
   const carbonAPI = window.carbonAPI as typeof window.carbonAPI & {
     onSessionUpdate?: (callback: (data: { sessionId: string; status: string; currentGoal: string }) => void) => (() => void);
     onSessionWorkingSet?: (callback: (data: { sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }) => void) => (() => void);
+    onSessionEvent?: (callback: (data: { sessionId: string; event: SessionEvent }) => void) => (() => void);
   };
 
   refreshBtn.addEventListener("click", () => void hydrateSession());
@@ -225,32 +242,40 @@ export function renderSessionView(container: HTMLElement): void {
   });
   if (workingSetUnsub) state.cleanup.push(workingSetUnsub);
 
+  const eventUnsub = carbonAPI.onSessionEvent?.((payload: { sessionId: string; event: SessionEvent }) => {
+    if (payload.sessionId !== sessionId) return;
+    if (state.events.some((event) => event.id === payload.event.id)) return;
+    state.events = [...state.events, payload.event];
+    renderTimeline(timeline);
+  });
+  if (eventUnsub) state.cleanup.push(eventUnsub);
+
   void hydrateSession();
 
   async function hydrateSession(): Promise<void> {
     const currentToken = renderToken;
     try {
       const [sessionResp, eventsResp, workingSetResp] = await Promise.all([
-        window.carbonAPI.invoke({ type: "session/get", id: sessionId } as any) as Promise<any>,
-        window.carbonAPI.invoke({ type: "session/events", id: sessionId } as any) as Promise<any>,
-        window.carbonAPI.invoke({ type: "session/working-set", id: sessionId } as any) as Promise<any>,
+        window.carbonAPI.invoke({ type: "session/get", id: sessionId }) as Promise<SessionGetResponse>,
+        window.carbonAPI.invoke({ type: "session/events", id: sessionId }) as Promise<SessionEventsResponse>,
+        window.carbonAPI.invoke({ type: "session/working-set", id: sessionId }) as Promise<SessionWorkingSetResponse>,
       ]);
       if (currentToken !== state.renderToken) return;
 
       if (sessionResp.type === "session/get.success") {
-        state.session = sessionResp.data as OrchestrationSession;
+        state.session = sessionResp.data;
       } else {
         throw new Error(String(sessionResp.error ?? "Failed to load session"));
       }
 
       if (eventsResp.type === "session/events.success") {
-        state.events = (eventsResp.events ?? []) as SessionEvent[];
+        state.events = eventsResp.events ?? [];
       } else {
         state.events = [];
       }
 
       if (workingSetResp.type === "session/working-set.success") {
-        state.workingSet = workingSetResp.data as SessionWorkingSet;
+        state.workingSet = workingSetResp.data;
       } else {
         state.workingSet = null;
       }

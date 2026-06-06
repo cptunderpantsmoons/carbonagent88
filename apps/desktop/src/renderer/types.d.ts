@@ -1,3 +1,5 @@
+import type { SessionEvent } from "@carbon-agent/shared-schemas";
+
 export {};
 
 declare global {
@@ -11,6 +13,7 @@ declare global {
       onVaultChange?: (callback: (data: { workspaceId: string; filePath: string; content: string }) => void) => () => void;
       onSessionUpdate?: (callback: (data: { sessionId: string; status: string; currentGoal: string }) => void) => () => void;
       onSessionWorkingSet?: (callback: (data: { sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }) => void) => () => void;
+      onSessionEvent?: (callback: (data: { sessionId: string; event: SessionEvent }) => void) => () => void;
     };
     __setActiveView__?: (name: string) => void;
     __openRunInspector__?: (runId: string) => void;

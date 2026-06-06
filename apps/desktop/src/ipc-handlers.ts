@@ -152,6 +152,19 @@ function mapSkillRow(row: Record<string, unknown>) {
   };
 }
 
+function mapProviderRow(row: Record<string, unknown> | undefined) {
+  if (!row) throw new Error("Provider row missing");
+  return {
+    id: String(row.id),
+    type: String(row.type) as "anthropic" | "openai" | "custom-openai",
+    name: String(row.name ?? ""),
+    baseUrl: row.base_url == null ? undefined : String(row.base_url),
+    model: String(row.model ?? ""),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
 function mapWatcherRow(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -264,18 +277,18 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       // ==================== Provider ====================
       case "provider/list": {
         const rows = await d.listProviders();
-        return { type: "provider/list.success", data: rows };
+        return { type: "provider/list.success", data: rows.map((row) => mapProviderRow(row as Record<string, unknown>)) };
       }
       case "provider/create": {
         const id = crypto.randomUUID();
         await d.createProvider({ id, type: request.data.type, name: request.data.name, apiKey: request.data.apiKey, baseUrl: request.data.baseUrl, model: request.data.model });
         const created = await d.getProvider(id);
-        return { type: "provider/create.success", data: created };
+        return { type: "provider/create.success", data: mapProviderRow(created as Record<string, unknown> | undefined) };
       }
       case "provider/update": {
         await d.updateProvider({ id: request.id, type: request.data.type, name: request.data.name, apiKey: request.data.apiKey, baseUrl: request.data.baseUrl, model: request.data.model });
         const updated = await d.getProvider(request.id);
-        return { type: "provider/update.success", data: updated };
+        return { type: "provider/update.success", data: mapProviderRow(updated as Record<string, unknown> | undefined) };
       }
       case "provider/delete": {
         await d.deleteProvider(request.id);
@@ -487,18 +500,27 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         if (!run) return { type: "error", error: "Run not found", code: "RUN_NOT_FOUND" };
         if (!run.provider_id) return { type: "error", error: "Run has no provider", code: "PROVIDER_NOT_FOUND" };
         const root = JSON.parse(String(row.root_json)) as { kind: "outlook-thread"; threadId: string; threadSubject: string; mailbox: string };
-        const runResult = await runAgent({
-          db: d,
-          workspaceId: String(row.workspace_id),
-          conversationId: String(row.conversation_id),
-          providerId: String(run.provider_id),
-          message: String(row.current_goal),
-          runId: String(row.run_id),
-          sessionId: String(row.id),
-          sessionGoal: String(row.current_goal),
-          sessionRoot: root,
-          supervisionMode: String(row.supervision_mode) as "watch" | "confirm",
-        });
+        const runId = String(row.run_id);
+        let runResult: Awaited<ReturnType<typeof runAgent>>;
+        try {
+          runResult = await runAgent({
+            db: d,
+            workspaceId: String(row.workspace_id),
+            conversationId: String(row.conversation_id),
+            providerId: String(run.provider_id),
+            message: String(row.current_goal),
+            runId,
+            sessionId: String(row.id),
+            sessionGoal: String(row.current_goal),
+            sessionRoot: root,
+            supervisionMode: String(row.supervision_mode) as "watch" | "confirm",
+            onRuntime: (runtime) => {
+              activeRuns.set(runId, runtime);
+            },
+          });
+        } finally {
+          activeRuns.delete(runId);
+        }
         await d.updateOrchestrationSessionStatus(String(row.id), runResult.runStatus, runResult.runError ?? null);
         emitSessionUpdate({ sessionId: String(row.id), status: runResult.runStatus, currentGoal: String(row.current_goal) });
         const workingSet = await d.getSessionWorkingSet(String(row.id));
@@ -685,7 +707,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
 
       // ==================== Stats ====================
       case "stats/list": {
-        return { type: "stats/list.success", activeRuns: await d.countRunningRuns() };
+        return { type: "stats/list.success", activeRuns: Math.max(activeRuns.size, await d.countRunningRuns()) };
       }
 
       default:
