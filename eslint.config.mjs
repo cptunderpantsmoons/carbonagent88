@@ -45,6 +45,8 @@ export default defineConfig([
       "apps/desktop/src/renderer/mock-api.ts",
       "**/vitest.config.ts",
       "apps/desktop/vite.renderer.config.ts",
+      ".qoder/**",
+      ".pew/**",
     ],
   },
 ]);

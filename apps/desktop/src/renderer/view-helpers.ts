@@ -19,6 +19,7 @@ export const appState = {
   currentConversationId: null as string | null,
   currentWorkspaceId: null as string | null,
   currentRunId: null as string | null,
+  currentSessionId: null as string | null,
   currentProfileId: null as string | null,
   workspaces: [] as WorkspaceRecord[],
   providers: [] as ProviderRecord[],

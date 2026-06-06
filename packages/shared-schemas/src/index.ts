@@ -224,7 +224,7 @@ export type AgentMemory = z.infer<typeof AgentMemorySchema>;
 // Model Roles
 // ---------------------------------------------------------------------------
 
-export const ModelRoleNameSchema = z.enum(["assistant", "coder", "knowledge-graph", "meeting-notes", "track-block"]);
+export const ModelRoleNameSchema = z.enum(["assistant", "planner", "browser", "knowledge-graph", "validator", "judge", "coder", "meeting-notes", "track-block"]);
 
 export type ModelRoleName = z.infer<typeof ModelRoleNameSchema>;
 

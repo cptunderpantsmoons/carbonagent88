@@ -4,6 +4,7 @@ import {
   BrowserProfileSchema,
   WorkspaceSchema,
   ConversationSchema,
+  ModelRoleNameSchema,
   OrchestrationSessionSchema,
   SessionEventSchema,
   SessionWorkingSetSchema,
@@ -178,6 +179,13 @@ describe("Schema Validation", () => {
   });
 
   describe("Orchestration session schemas", () => {
+    it("accepts the orchestration model role set", () => {
+      expect(ModelRoleNameSchema.parse("planner")).toBe("planner");
+      expect(ModelRoleNameSchema.parse("browser")).toBe("browser");
+      expect(ModelRoleNameSchema.parse("validator")).toBe("validator");
+      expect(ModelRoleNameSchema.parse("judge")).toBe("judge");
+    });
+
     it("validates an email-thread-rooted orchestration session", () => {
       const now = new Date().toISOString();
       const result = OrchestrationSessionSchema.parse({

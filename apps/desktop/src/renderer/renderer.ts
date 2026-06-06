@@ -8,6 +8,7 @@ import { renderOutputs } from "./views/outputs-view.js";
 import { renderPlayground } from "./views/playground-view.js";
 import { renderProfiles } from "./views/profiles-view.js";
 import { renderProviders } from "./views/providers-view.js";
+import { cleanupSessionView, renderSessionView } from "./views/session-view.js";
 import { renderSkills } from "./views/skills-view.js";
 import { renderWatchers } from "./views/watchers-view.js";
 import { renderWorkspaces } from "./views/workspaces-view.js";
@@ -59,6 +60,7 @@ function setActiveView(name: string): void {
 
 const titleMap: Record<string, string> = {
   playground: "Playground",
+  sessions: "Sessions",
   providers: "AI Providers",
   profiles: "Cloak Bridge",
   workspaces: "Workspaces",
@@ -87,6 +89,7 @@ function initNavigation(): void {
 function getCommandPaletteItems(): CommandPaletteItem[] {
   return [
     { group: "Navigation", iconClass: "icon-playground", label: "Go to Playground", action: () => setActiveView("playground"), shortcut: "G P" },
+    { group: "Navigation", iconClass: "icon-session", label: "Go to Sessions", action: () => setActiveView("sessions"), shortcut: "G E" },
     { group: "Navigation", iconClass: "icon-providers", label: "Go to AI Providers", action: () => setActiveView("providers"), shortcut: "G A" },
     { group: "Navigation", iconClass: "icon-profile", label: "Go to Cloak Bridge", action: () => setActiveView("profiles"), shortcut: "G C" },
     { group: "Navigation", iconClass: "icon-workspace", label: "Go to Workspaces", action: () => setActiveView("workspaces"), shortcut: "G W" },
@@ -262,6 +265,7 @@ async function init(): Promise<void> {
   initCommandPalette();
 
   registerView("playground", { render: renderPlayground });
+  registerView("sessions", { render: renderSessionView, onHide: cleanupSessionView });
   registerView("providers", { render: renderProviders });
   registerView("profiles", { render: renderProfiles });
   registerView("workspaces", { render: renderWorkspaces });

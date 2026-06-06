@@ -127,7 +127,7 @@ function mapDocumentRow(row: Record<string, unknown>) {
 }
 
 function mapSkillRow(row: Record<string, unknown>) {
-  let toolSequence: unknown[] = [];
+  let toolSequence: unknown[];
   try {
     toolSequence = JSON.parse(String(row.tool_sequence_json ?? "[]")) as unknown[];
   } catch {
@@ -169,7 +169,7 @@ function mapWatcherRow(row: Record<string, unknown>) {
 }
 
 function mapMemoryRow(row: Record<string, unknown>) {
-  let tags: string[] = [];
+  let tags: string[];
   try { tags = JSON.parse(String(row.tags_json ?? "[]")) as string[]; } catch { tags = []; }
   return {
     id: String(row.id),

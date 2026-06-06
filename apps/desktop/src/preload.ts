@@ -19,6 +19,8 @@ export interface CarbonAPI {
   onAXTree?: (callback: (data: { profileId: string; tree: DesktopAXTreeNode; activeNodeId?: string }) => void) => () => void;
   onWatcherAnalytics?: (callback: (data: { runs: DesktopWatcherRun[] }) => void) => () => void;
   onVaultChange?: (callback: (data: { workspaceId: string; filePath: string; content: string }) => void) => () => void;
+  onSessionUpdate?: (callback: (data: { sessionId: string; status: string; currentGoal: string }) => void) => () => void;
+  onSessionWorkingSet?: (callback: (data: { sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }) => void) => () => void;
 }
 
 function createListener<T>(channel: string) {
@@ -39,6 +41,8 @@ const api: CarbonAPI = {
   onAXTree: createListener<{ profileId: string; tree: DesktopAXTreeNode; activeNodeId?: string }>("carbon-event:axtree"),
   onWatcherAnalytics: createListener<{ runs: DesktopWatcherRun[] }>("carbon-event:watcher-analytics"),
   onVaultChange: createListener<{ workspaceId: string; filePath: string; content: string }>("carbon-event:vault-change"),
+  onSessionUpdate: createListener<{ sessionId: string; status: string; currentGoal: string }>("carbon-event:session-update"),
+  onSessionWorkingSet: createListener<{ sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }>("carbon-event:session-working-set"),
 };
 
 contextBridge.exposeInMainWorld("carbonAPI", api);

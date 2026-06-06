@@ -60,10 +60,13 @@ export function renderProviders(container: HTMLElement): void {
 
 const ROLE_DEFINITIONS = [
   { role: "assistant" as const, label: "Assistant", desc: "General conversations and task coordination" },
+  { role: "planner" as const, label: "Planner", desc: "Breaks goals into stages and sequences" },
+  { role: "browser" as const, label: "Browser", desc: "Executes browser work and evidence collection" },
+  { role: "knowledge-graph" as const, label: "Knowledge Graph", desc: "Connects entities and source context" },
+  { role: "validator" as const, label: "Validator", desc: "Checks evidence quality and completeness" },
+  { role: "judge" as const, label: "Judge", desc: "Decides whether a session can close" },
   { role: "coder" as const, label: "Coder", desc: "Code generation, editing, and debugging" },
-  { role: "knowledge-graph" as const, label: "Knowledge Graph", desc: "Knowledge extraction and entity linking" },
   { role: "meeting-notes" as const, label: "Meeting Notes", desc: "Summarization and note generation" },
-  { role: "track-block" as const, label: "Track Block", desc: "Task tracking and project management" },
 ];
 
 async function renderModelRoles(grid: HTMLElement): Promise<void> {
