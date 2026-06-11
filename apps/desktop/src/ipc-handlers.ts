@@ -181,6 +181,24 @@ function mapWatcherRow(row: Record<string, unknown>) {
   };
 }
 
+function mapHarnessConfigRow(row: Record<string, unknown>) {
+  let qualityGates: string[];
+  try { qualityGates = JSON.parse(String(row.quality_gates_json ?? "[]")) as string[]; } catch { qualityGates = []; }
+  let extraJson: Record<string, unknown>;
+  try { extraJson = JSON.parse(String(row.extra_json ?? "{}")) as Record<string, unknown>; } catch { extraJson = {}; }
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    harnessId: String(row.harness_id),
+    enabled: Boolean(Number(row.enabled ?? 1)),
+    taskTemplate: row.task_template == null ? null : String(row.task_template),
+    qualityGates,
+    extraJson,
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
 function mapMemoryRow(row: Record<string, unknown>) {
   let tags: string[];
   try { tags = JSON.parse(String(row.tags_json ?? "[]")) as string[]; } catch { tags = []; }
@@ -703,6 +721,53 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       case "model-roles/delete": {
         await dbDeleteModelRole(request.role as ModelRoleName, request.workspaceId);
         return { type: "model-roles/delete.success" };
+      }
+
+      // ==================== Harness Configs ====================
+      case "harness-configs/list": {
+        const rows = await (d as any).listHarnessConfigs(request.workspaceId);
+        const defaults: Array<{ harnessId: string; enabled: boolean; taskTemplate: string | null; qualityGates: string[]; extraJson: Record<string, unknown> }> = [
+          { harnessId: "browser",      enabled: true, taskTemplate: "Collect evidence from authenticated browser portals. Use stealth_open, stealth_scrape, and stealth_download tools.", qualityGates: ["At least 2 distinct sources must corroborate key claims"], extraJson: {} },
+          { harnessId: "claude-code",  enabled: true, taskTemplate: "Refactor, edit, and generate code across the workspace. Use terminal and file editing tools.", qualityGates: [], extraJson: {} },
+          { harnessId: "codex",        enabled: true, taskTemplate: "Generate new modules and analyze code autonomously. Sandboxed to the workspace.", qualityGates: [], extraJson: {} },
+          { harnessId: "local",        enabled: true, taskTemplate: "Research topics, extract structured data from text, and draft documents. Use reasoning and synthesis.", qualityGates: [], extraJson: {} },
+        ];
+        const byId = new Map<string, Record<string, unknown>>();
+        for (const row of rows) byId.set(String((row as any).harness_id), row as Record<string, unknown>);
+        const data = defaults.map((def) => {
+          const row = byId.get(def.harnessId);
+          if (row) return mapHarnessConfigRow(row);
+          return {
+            id: crypto.randomUUID(),
+            workspaceId: request.workspaceId,
+            harnessId: def.harnessId,
+            enabled: def.enabled,
+            taskTemplate: def.taskTemplate,
+            qualityGates: def.qualityGates,
+            extraJson: def.extraJson,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return { type: "harness-configs/list.success", data };
+      }
+      case "harness-configs/get": {
+        const row = await (d as any).getHarnessConfig(request.workspaceId, request.harnessId);
+        if (!row) return { type: "harness-configs/get.success", data: null };
+        return { type: "harness-configs/get.success", data: mapHarnessConfigRow(row as Record<string, unknown>) };
+      }
+      case "harness-configs/update": {
+        await (d as any).upsertHarnessConfig({
+          id: request.id,
+          workspaceId: request.workspaceId,
+          harnessId: request.harnessId,
+          enabled: request.data.enabled,
+          taskTemplate: request.data.taskTemplate,
+          qualityGatesJson: request.data.qualityGates ? JSON.stringify(request.data.qualityGates) : undefined,
+          extraJson: request.data.extraJson ? JSON.stringify(request.data.extraJson) : undefined,
+        });
+        const row = await (d as any).getHarnessConfig(request.workspaceId, request.harnessId);
+        return { type: "harness-configs/update.success", data: mapHarnessConfigRow(row as Record<string, unknown>) };
       }
 
       // ==================== Stats ====================

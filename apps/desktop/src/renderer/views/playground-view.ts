@@ -12,78 +12,232 @@ import {
   setWorkspaceLabel,
 } from "../view-helpers.js";
 
+const HARNESS_DEFS = [
+  { id: "browser", label: "Browser", icon: "&#9672;" },
+  { id: "claude-code", label: "Claude Code", icon: "&#9670;" },
+  { id: "codex", label: "Codex", icon: "&#9671;" },
+  { id: "local", label: "Local Agent", icon: "&#9673;" },
+];
+
+type HarnessConfigFromIPC = {
+  id: string;
+  workspaceId: string;
+  harnessId: string;
+  enabled: boolean;
+  taskTemplate: string | null;
+  qualityGates: string[];
+  extraJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function getEnabledHarnesses(configs: HarnessConfigFromIPC[]): string[] {
+  return configs.filter((c) => c.enabled).map((c) => c.harnessId);
+}
+
+async function loadHarnessConfigs(workspaceId: string): Promise<HarnessConfigFromIPC[]> {
+  const resp = await window.carbonAPI.invoke({ type: "harness-configs/list", workspaceId } as any);
+  if (resp && typeof resp === "object" && (resp as any).type === "harness-configs/list.success") {
+    return ((resp as any).data as HarnessConfigFromIPC[]) ?? [];
+  }
+  return [];
+}
+
+function getMissionSuggestions(enabled: string[]): string[] {
+  const s: string[] = [];
+  if (enabled.includes("browser")) {
+    s.push("Collect evidence from authenticated systems");
+  }
+  if (enabled.includes("claude-code")) {
+    s.push("Refactor the codebase based on this thread");
+  }
+  if (enabled.includes("codex")) {
+    s.push("Generate a new module from requirements");
+  }
+  if (enabled.includes("browser") && (enabled.includes("claude-code") || enabled.includes("codex"))) {
+    s.push("Collect evidence and generate a financial report");
+  }
+  if (s.length === 0) s.push("Run a general research task");
+  return s;
+}
+
 export function renderPlayground(container: HTMLElement): void {
   container.innerHTML = "";
   const shell = document.createElement("div");
   shell.className = "view-stack playground-shell";
 
-  const hero = document.createElement("section");
-  hero.className = "view-hero";
-  hero.innerHTML = `
-    <div class="view-hero-kicker">Playground</div>
-    <div class="view-hero-title">Launch a session with a clean, controlled setup.</div>
-    <div class="view-hero-copy">Pick a workspace, choose a provider, and define the thread details before the session starts. The layout keeps the launch controls separate from the transcript so the flow stays readable.</div>
+  // ── Launcher ────────────────────────────────────────────────────────
+  const launcher = document.createElement("section");
+  launcher.className = "view-panel mission-launcher";
+
+  const launchHeader = document.createElement("div");
+  launchHeader.className = "mission-launcher-header";
+  launchHeader.innerHTML = `
+    <div class="mission-launcher-kicker">Mission Control</div>
+    <div class="mission-launcher-title">Launch an orchestration mission</div>
   `;
-  const heroMeta = document.createElement("div");
-  heroMeta.className = "view-hero-meta";
-  heroMeta.innerHTML = `<span>Workspace</span><span>Provider</span><span>Supervision</span><span>Transcript</span>`;
-  hero.appendChild(heroMeta);
-  shell.appendChild(hero);
 
-  const launchCard = document.createElement("section");
-  launchCard.className = "view-panel";
-
-  const header = document.createElement("div");
-  header.className = "view-toolbar";
-
-  const sessionInfo = document.createElement("div");
-  sessionInfo.className = "view-toolbar-group";
+  // Top controls: workspace, provider, supervision
+  const controls = document.createElement("div");
+  controls.className = "mission-controls";
 
   const wsSelect = document.createElement("select");
-  wsSelect.className = "form-select session-select";
+  wsSelect.className = "form-select mission-control";
   wsSelect.id = "workspace-selector";
-  wsSelect.innerHTML = '<option value="">Select Workspace...</option>';
+  wsSelect.innerHTML = '<option value="">Workspace...</option>';
 
   const provSelect = document.createElement("select");
-  provSelect.className = "form-select session-select";
-  provSelect.innerHTML = '<option value="">Select AI Provider...</option>';
+  provSelect.className = "form-select mission-control";
+  provSelect.innerHTML = '<option value="">Provider...</option>';
 
   const supervisionSelect = document.createElement("select");
-  supervisionSelect.className = "form-select session-select";
+  supervisionSelect.className = "form-select mission-control";
   supervisionSelect.innerHTML = `
-    <option value="watch">Watch - observe and collect evidence</option>
-    <option value="confirm">Confirm - require review before action</option>
+    <option value="watch">Watch mode</option>
+    <option value="confirm">Confirm mode</option>
   `;
 
-  const resetBtn = createButton("New Session", "secondary", "sm");
-  sessionInfo.append(wsSelect, provSelect, supervisionSelect, resetBtn);
-  header.appendChild(sessionInfo);
-  launchCard.appendChild(header);
+  const resetBtn = createButton("New", "secondary", "sm");
+  controls.append(wsSelect, provSelect, supervisionSelect, resetBtn);
 
-  const launchGrid = document.createElement("div");
-  launchGrid.className = "session-launch-grid";
+  // Goal input
+  const goalWrap = document.createElement("div");
+  goalWrap.className = "mission-input-wrap";
+
+  const goalLabel = document.createElement("label");
+  goalLabel.className = "mission-input-label";
+  goalLabel.textContent = "Mission Objective";
 
   const goalInput = document.createElement("textarea");
-  goalInput.className = "form-input session-goal";
-  goalInput.rows = 4;
-  goalInput.placeholder = "Describe the orchestration goal...";
+  goalInput.className = "form-input mission-input";
+  goalInput.rows = 3;
+  goalInput.placeholder = "Describe what the mission should accomplish in natural language...";
+
+  goalWrap.append(goalLabel, goalInput);
+
+  // Harness chips
+  const harnessWrap = document.createElement("div");
+  harnessWrap.className = "mission-harness-wrap";
+
+  const harnessLabel = document.createElement("div");
+  harnessLabel.className = "mission-harness-label";
+  harnessLabel.textContent = "Active Harnesses";
+
+  const harnessRow = document.createElement("div");
+  harnessRow.className = "mission-harness-row";
+  let harnessConfigs: HarnessConfigFromIPC[] = [];
+  let harnessConfigMap = new Map<string, HarnessConfigFromIPC>();
+
+  function renderHarnessChips() {
+    harnessRow.innerHTML = "";
+    const enabledIds = getEnabledHarnesses(harnessConfigs);
+    for (const def of HARNESS_DEFS) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "harness-chip";
+      if (enabledIds.includes(def.id)) chip.classList.add("active");
+      chip.innerHTML = `<span class="harness-chip-icon">${def.icon}</span><span>${def.label}</span>`;
+      chip.addEventListener("click", async () => {
+        const config = harnessConfigMap.get(def.id);
+        if (!config) {
+          Toast.show("Select a workspace first", "warning");
+          return;
+        }
+        const newEnabled = !config.enabled;
+        try {
+          await window.carbonAPI.invoke({
+            type: "harness-configs/update",
+            id: config.id,
+            workspaceId: config.workspaceId,
+            harnessId: config.harnessId,
+            data: { enabled: newEnabled },
+          } as any);
+          const reloaded = await loadHarnessConfigs(config.workspaceId);
+          harnessConfigs = reloaded;
+          harnessConfigMap = new Map(reloaded.map((c) => [c.harnessId, c]));
+          renderHarnessChips();
+          refreshSuggestions();
+        } catch {
+          Toast.show(`Failed to update ${def.label} harness`, "error");
+        }
+      });
+      harnessRow.appendChild(chip);
+    }
+  }
+  renderHarnessChips();
+
+  harnessWrap.append(harnessLabel, harnessRow);
+
+  // Suggestion chips
+  const suggestionWrap = document.createElement("div");
+  suggestionWrap.className = "mission-suggestion-wrap";
+
+  const suggestionRow = document.createElement("div");
+  suggestionRow.className = "mission-suggestion-row";
+
+  function refreshSuggestions() {
+    suggestionRow.innerHTML = "";
+    const suggestions = getMissionSuggestions(getEnabledHarnesses(harnessConfigs));
+    for (const text of suggestions) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "mission-suggestion-chip";
+      chip.textContent = text;
+      chip.addEventListener("click", () => {
+        goalInput.value = text;
+        goalInput.focus();
+      });
+      suggestionRow.appendChild(chip);
+    }
+  }
+  refreshSuggestions();
+
+  suggestionWrap.appendChild(suggestionRow);
+
+  // Thread details (collapsible)
+  const detailsToggle = document.createElement("button");
+  detailsToggle.type = "button";
+  detailsToggle.className = "mission-details-toggle";
+  detailsToggle.textContent = "Thread Details";
+
+  const detailsPanel = document.createElement("div");
+  detailsPanel.className = "mission-details-panel";
+  detailsPanel.style.display = "none";
 
   const threadSubjectInput = createInput("e.g., Month end close");
   const threadIdInput = createInput("e.g., AAMkAGI2-thread");
   const mailboxInput = createInput("e.g., finance@example.com");
 
-  launchGrid.append(
-    buildField("Goal", goalInput, "What should the session accomplish?"),
+  detailsPanel.append(
     buildField("Thread subject", threadSubjectInput, "The Outlook thread subject."),
     buildField("Thread ID / fragment", threadIdInput, "The thread identifier or URL fragment."),
     buildField("Mailbox", mailboxInput, "The source mailbox to inspect."),
   );
-  const chips = document.createElement("div");
-  chips.className = "task-chips";
-  const suggestions = ["Collect reporting inputs", "Trace the latest invoice thread", "Validate supporting evidence"];
-  launchCard.append(launchGrid, chips);
-  shell.appendChild(launchCard);
 
+  detailsToggle.addEventListener("click", () => {
+    const showing = detailsPanel.style.display !== "none";
+    detailsPanel.style.display = showing ? "none" : "grid";
+    detailsToggle.classList.toggle("open", !showing);
+  });
+
+  // Launch button
+  const launchBtn = document.createElement("button");
+  launchBtn.className = "btn btn-primary mission-launch-btn";
+  launchBtn.textContent = "LAUNCH MISSION";
+
+  launcher.append(
+    launchHeader,
+    controls,
+    goalWrap,
+    harnessWrap,
+    suggestionWrap,
+    detailsToggle,
+    detailsPanel,
+    launchBtn,
+  );
+  shell.appendChild(launcher);
+
+  // ── Transcript ──────────────────────────────────────────────────────
   const transcriptCard = document.createElement("section");
   transcriptCard.className = "view-panel";
   const transcriptHeader = document.createElement("div");
@@ -91,7 +245,7 @@ export function renderPlayground(container: HTMLElement): void {
   transcriptHeader.innerHTML = `
     <div>
       <div class="view-panel-title">Transcript</div>
-      <div class="view-panel-copy">Session progress and responses appear here after launch.</div>
+      <div class="view-panel-copy">Mission progress and agent responses.</div>
     </div>
   `;
   const chatContainer = document.createElement("div");
@@ -101,25 +255,15 @@ export function renderPlayground(container: HTMLElement): void {
 
   const inputBar = document.createElement("div");
   inputBar.className = "chat-input-bar";
-  const startBtn = createButton("Start Session", "primary");
-  inputBar.append(startBtn);
+  const chatSendBtn = createButton("Send", "primary");
+  inputBar.appendChild(chatSendBtn);
   chatContainer.append(messages, inputBar);
   transcriptCard.append(transcriptHeader, chatContainer);
   shell.appendChild(transcriptCard);
   container.appendChild(shell);
 
-  for (const suggestion of suggestions) {
-    const chip = document.createElement("button");
-    chip.className = "task-chip";
-    chip.textContent = suggestion;
-    chip.addEventListener("click", () => {
-      goalInput.value = suggestion;
-      goalInput.focus();
-    });
-    chips.appendChild(chip);
-  }
-
-  wsSelect.addEventListener("change", () => {
+  // Event wiring
+  wsSelect.addEventListener("change", async () => {
     appState.currentWorkspaceId = wsSelect.value || null;
     appState.currentConversationId = null;
     appState.currentRunId = null;
@@ -127,6 +271,21 @@ export function renderPlayground(container: HTMLElement): void {
     const selected = wsSelect.selectedOptions[0];
     setWorkspaceLabel(selected?.value ? (selected.textContent || "Workspace") : "No Workspace");
     addSystemMessage(messages, `Workspace set to ${selected?.textContent || "No Workspace"}.`);
+
+    if (appState.currentWorkspaceId) {
+      try {
+        const configs = await loadHarnessConfigs(appState.currentWorkspaceId);
+        harnessConfigs = configs;
+        harnessConfigMap = new Map(configs.map((c) => [c.harnessId, c]));
+        renderHarnessChips();
+        refreshSuggestions();
+      } catch { /* ignore */ }
+    } else {
+      harnessConfigs = [];
+      harnessConfigMap = new Map();
+      renderHarnessChips();
+      refreshSuggestions();
+    }
   });
 
   provSelect.addEventListener("change", () => {
@@ -148,55 +307,51 @@ export function renderPlayground(container: HTMLElement): void {
     threadSubjectInput.value = "";
     threadIdInput.value = "";
     mailboxInput.value = "";
-    addSystemMessage(messages, "New session draft started.");
+    addSystemMessage(messages, "New mission draft started.");
   });
 
-  startBtn.addEventListener("click", () => void send());
+  launchBtn.addEventListener("click", () => void launchMission());
   goalInput.addEventListener("keydown", (event: KeyboardEvent) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      if (event.metaKey || event.ctrlKey) {
-        event.preventDefault();
-        void send();
-      }
+    if (event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void launchMission();
+    }
+  });
+
+  chatSendBtn.addEventListener("click", () => {
+    const msg = (chatSendBtn.previousElementSibling as HTMLInputElement | null)?.value?.trim();
+    if (msg) {
+      messages.appendChild(createChatMessage("user", msg));
     }
   });
 
   void loadWorkspaces().then((workspaces) => {
-    populateSelect(wsSelect, workspaces, (workspace) => workspace.name, "Select Workspace...");
-    if (appState.currentWorkspaceId) {
-      wsSelect.value = appState.currentWorkspaceId;
-    }
+    populateSelect(wsSelect, workspaces, (workspace) => workspace.name, "Workspace...");
+    if (appState.currentWorkspaceId) wsSelect.value = appState.currentWorkspaceId;
   });
   void loadProviders().then((providers) => {
-    populateSelect(provSelect, providers, (provider) => `${provider.name} (${provider.type})`, "Select AI Provider...");
+    populateSelect(provSelect, providers, (provider) => `${provider.name} (${provider.type})`, "Provider...");
     if (!provSelect.value && providers.length > 0) {
       provSelect.value = providers[0].id;
-      const selected = provSelect.selectedOptions[0];
-      setProviderLabel(selected?.textContent || "Provider");
+      setProviderLabel(providers[0].name);
     }
   });
 
-  addSystemMessage(messages, "Select a workspace and provider, then define the thread goal and launch the session.");
+  addSystemMessage(messages, "Select a workspace and provider, define the mission objective, then launch.");
 
-  async function send(): Promise<void> {
+  async function launchMission(): Promise<void> {
     const goal = goalInput.value.trim();
     const threadSubject = threadSubjectInput.value.trim();
     const threadId = threadIdInput.value.trim();
     const mailbox = mailboxInput.value.trim();
-    if (!goal) {
-      Toast.show("Please enter a session goal", "warning");
-      return;
-    }
-    if (!wsSelect.value) {
-      Toast.show("Please select a workspace first", "warning");
-      return;
-    }
-    if (!provSelect.value) {
-      Toast.show("Please select an AI provider first", "warning");
-      return;
-    }
+
+    if (!goal) { Toast.show("Please enter a mission objective", "warning"); return; }
+    if (!wsSelect.value) { Toast.show("Please select a workspace", "warning"); return; }
+    if (!provSelect.value) { Toast.show("Please select a provider", "warning"); return; }
     if (!threadSubject || !threadId || !mailbox) {
       Toast.show("Please complete the thread details", "warning");
+      detailsPanel.style.display = "grid";
+      detailsToggle.classList.add("open");
       return;
     }
 
@@ -207,11 +362,11 @@ export function renderPlayground(container: HTMLElement): void {
     threadIdInput.disabled = true;
     mailboxInput.disabled = true;
     supervisionSelect.disabled = true;
-    startBtn.disabled = true;
-    startBtn.textContent = "Launching...";
+    launchBtn.disabled = true;
+    launchBtn.textContent = "LAUNCHING...";
 
     const runStatusText = document.getElementById("run-status-text");
-    if (runStatusText) runStatusText.textContent = "Launching session";
+    if (runStatusText) runStatusText.textContent = "Launching mission";
 
     try {
       if (!appState.currentConversationId) {
@@ -227,19 +382,15 @@ export function renderPlayground(container: HTMLElement): void {
         type: "run/create",
         conversationId: appState.currentConversationId as string,
         providerId: provSelect.value || null,
-      } as unknown as Record<string, unknown>) as unknown as Record<string, unknown>;
+      } as any) as any;
       if (runResp.type !== "run/create.success") throw new Error(String(runResp.error ?? "Failed to create run"));
+
       const sessionResp = await window.carbonAPI.invoke({
         type: "session/create",
         workspaceId: appState.currentWorkspaceId,
         conversationId: appState.currentConversationId,
-        runId: (runResp.data as { id: string }).id,
-        root: {
-          kind: "outlook-thread",
-          threadId,
-          threadSubject,
-          mailbox,
-        },
+        runId: runResp.data.id,
+        root: { kind: "outlook-thread", threadId, threadSubject, mailbox },
         supervisionMode: supervisionSelect.value || "watch",
         goal,
       } as any) as any;
@@ -250,10 +401,10 @@ export function renderPlayground(container: HTMLElement): void {
       appState.currentRunId = sessionResp.data.runId;
       appState.currentSessionId = sessionResp.data.id;
 
-      const sessionMessage = createChatMessage("system", `Session ${sessionResp.data.id} created for ${threadSubject}.`);
+      const sessionMessage = createChatMessage("system", `Mission ${sessionResp.data.id} created for ${threadSubject}.`);
       const viewSessionBtn = document.createElement("button");
       viewSessionBtn.className = "btn btn-ghost btn-sm mt-6";
-      viewSessionBtn.textContent = "View Session";
+      viewSessionBtn.textContent = "View Mission";
       viewSessionBtn.addEventListener("click", () => window.__setActiveView__?.("sessions"));
       sessionMessage.appendChild(viewSessionBtn);
       messages.appendChild(sessionMessage);
@@ -264,26 +415,26 @@ export function renderPlayground(container: HTMLElement): void {
           messages.appendChild(createChatMessage("assistant", startResp.data.fullResponse));
         }
         if (startResp.data.runStatus !== "completed") {
-          addSystemMessage(messages, startResp.data.runError || `Session ${startResp.data.runStatus}.`);
+          addSystemMessage(messages, startResp.data.runError || `Mission ${startResp.data.runStatus}.`);
         } else {
-          addSystemMessage(messages, "Session completed.");
+          addSystemMessage(messages, "Mission completed.");
         }
-        if (runStatusText) runStatusText.textContent = `Session ${startResp.data.runStatus}`;
+        if (runStatusText) runStatusText.textContent = `Mission ${startResp.data.runStatus}`;
       } else {
         throw new Error(String(startResp.error ?? "Failed to start session"));
       }
     } catch (error: unknown) {
       messages.appendChild(createChatMessage("system", `Error: ${error instanceof Error ? error.message : String(error)}`));
-      if (runStatusText) runStatusText.textContent = "Session error";
+      if (runStatusText) runStatusText.textContent = "Mission error";
     } finally {
       goalInput.disabled = false;
       threadSubjectInput.disabled = false;
       threadIdInput.disabled = false;
       mailboxInput.disabled = false;
       supervisionSelect.disabled = false;
-      startBtn.disabled = false;
-      startBtn.textContent = "Start Session";
-      if (runStatusText && runStatusText.textContent === "Launching session") runStatusText.textContent = "Idle";
+      launchBtn.disabled = false;
+      launchBtn.textContent = "LAUNCH MISSION";
+      if (runStatusText && runStatusText.textContent === "Launching mission") runStatusText.textContent = "Idle";
       goalInput.focus();
     }
   }

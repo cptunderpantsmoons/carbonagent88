@@ -383,6 +383,7 @@ export const CoreAgentRoleSchema = z.enum([
   "goals",
   "planner",
   "browser",
+  "harness",
   "knowledge",
   "validator",
   "judge",
@@ -411,6 +412,8 @@ export const SessionEventKindSchema = z.enum([
   "plan_updated",
   "browser_action_started",
   "browser_action_completed",
+  "harness_action_started",
+  "harness_action_completed",
   "document_discovered",
   "document_acquired",
   "working_set_updated",
@@ -418,6 +421,7 @@ export const SessionEventKindSchema = z.enum([
   "validation_failed",
   "judgment_requested",
   "judgment_returned",
+  "drift_detected",
   "specialist_spawned",
   "specialist_completed",
   "output_approved",
@@ -463,6 +467,33 @@ export const SessionWorkingSetSchema = z.object({
 });
 
 export type SessionWorkingSet = z.infer<typeof SessionWorkingSetSchema>;
+
+// ---------------------------------------------------------------------------
+// Harness Config
+// ---------------------------------------------------------------------------
+
+export const HarnessConfigSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  harnessId: z.string().min(1),
+  enabled: z.boolean().default(true),
+  taskTemplate: z.string().max(4000).nullable(),
+  qualityGates: z.array(z.string()).default([]),
+  extraJson: z.record(z.unknown()).default({}),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type HarnessConfig = z.infer<typeof HarnessConfigSchema>;
+
+export const HarnessConfigUpdateSchema = z.object({
+  enabled: z.boolean().optional(),
+  taskTemplate: z.string().max(4000).optional(),
+  qualityGates: z.array(z.string()).optional(),
+  extraJson: z.record(z.unknown()).optional(),
+});
+
+export type HarnessConfigUpdate = z.infer<typeof HarnessConfigUpdateSchema>;
 
 // ---------------------------------------------------------------------------
 // IPC Contracts — Renderer → Main (requests)
@@ -587,6 +618,10 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("model-roles/delete"), role: ModelRoleNameSchema, workspaceId: UuidSchema }),
   // Stats
   z.object({ type: z.literal("stats/list") }),
+  // Harness Configs
+  z.object({ type: z.literal("harness-configs/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("harness-configs/get"), workspaceId: UuidSchema, harnessId: z.string() }),
+  z.object({ type: z.literal("harness-configs/update"), id: UuidSchema, workspaceId: UuidSchema, harnessId: z.string(), data: HarnessConfigUpdateSchema }),
 ]);
 
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
@@ -698,6 +733,10 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("model-roles/list.success"), data: z.array(ModelRoleSchema) }),
   z.object({ type: z.literal("model-roles/set.success"), data: ModelRoleSchema.nullable() }),
   z.object({ type: z.literal("model-roles/delete.success") }),
+  // Harness Config responses
+  z.object({ type: z.literal("harness-configs/list.success"), data: z.array(HarnessConfigSchema) }),
+  z.object({ type: z.literal("harness-configs/get.success"), data: HarnessConfigSchema.nullable() }),
+  z.object({ type: z.literal("harness-configs/update.success"), data: HarnessConfigSchema }),
   // Stats
   z.object({ type: z.literal("stats/list.success"), activeRuns: z.number() }),
   // Errors

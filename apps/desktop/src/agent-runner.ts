@@ -2,8 +2,10 @@
  * Agent Runner — Shared execution logic for both IPC and watcher triggers.
  */
 
-import { AgentRuntime, BrowserOrchestrationRuntime, type ToolExecutor } from "@carbon-agent/core-runtime";
+import { AgentRuntime, type ToolExecutor, createProvider, HarnessRegistry, OrchestrationRuntime, BrowserHarness, CodeHarness, LocalHarness } from "@carbon-agent/core-runtime";
+import type { LLMProvider } from "@carbon-agent/core-runtime";
 import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole } from "@carbon-agent/local-store";
+import type { ModelRoleName } from "@carbon-agent/local-store";
 import { parseFile, chunkText, storeChunks, searchChunks, getEmbeddingProvider } from "@carbon-agent/ingestion";
 import { generateDocument } from "./document-generator.js";
 import { stealthOpen, stealthScrape, stealthDownload } from "@carbon-agent/cloak-bridge";
@@ -12,7 +14,7 @@ import path from "node:path";
 import { emitAgentTopology, emitVaultChange } from "./desktop-events.js";
 import { emitSessionEvent, emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { recordGeneratedDocument } from "./document-records.js";
-import { spawnCliSubAgent, type CliType } from "./cli-subagent.js";
+import { spawnCliSubAgent, detectCli, type CliType } from "./cli-subagent.js";
 import type { DesktopTopologyEdge, DesktopTopologyNode } from "./desktop-events.js";
 
 export interface RunAgentInput {
@@ -358,16 +360,163 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let runError: string | undefined;
   const runToolCalls: { name: string; input: Record<string, unknown>; output?: unknown }[] = [];
 
+  // ── Orchestration helpers ──────────────────────────────────────────────
+  async function resolveRoleProvider(role: ModelRoleName): Promise<{ provider: LLMProvider; model: string }> {
+    const roleProvider = await dbGetModelRole(workspaceId, role);
+    let targetConfig = providerConfig;
+    if (roleProvider?.provider_id) {
+      const rp = await db.getProviderWithKey(roleProvider.provider_id);
+      if (rp) {
+        targetConfig = {
+          id: rp.id as string,
+          type: rp.type as "anthropic" | "openai" | "custom-openai",
+          name: rp.name as string,
+          apiKey: rp.api_key as string,
+          baseUrl: rp.base_url as string | undefined,
+          model: rp.model as string,
+          createdAt: rp.created_at as string,
+          updatedAt: rp.updated_at as string,
+        };
+      }
+    }
+    return { provider: createProvider(targetConfig), model: targetConfig.model };
+  }
+
+  function extractJsonFromResponse(content: string): unknown {
+    const trimmed = content.trim();
+    try { return JSON.parse(trimmed); } catch { /* continue */ }
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (fenced) { try { return JSON.parse(fenced[1]); } catch { /* continue */ } }
+    const objMatch = trimmed.match(/(\{[\s\S]*\})/);
+    if (objMatch) { try { return JSON.parse(objMatch[1]); } catch { /* continue */ } }
+    return null;
+  }
+
   if (input.sessionId && input.sessionGoal && input.sessionRoot) {
     const sessionId = input.sessionId;
-    const sessionGoal = input.sessionGoal;
-    const sessionRoot = input.sessionRoot;
     const sessionDb = db as SessionStore;
     await sessionDb.updateOrchestrationSessionStatus(sessionId, "running");
     emitTopology("running");
 
-    const browserOrchestrationDeps: ConstructorParameters<typeof BrowserOrchestrationRuntime>[0] = {
+    // Load harness configs to get enabled harnesses, task templates, and quality gates
+    const harnessConfigRows = await db.listHarnessConfigs(workspaceId);
+    const enabledHarnessIds = new Set(
+      harnessConfigRows.filter((r: any) => Number(r.enabled) !== 0).map((r: any) => String(r.harness_id))
+    );
+    const taskTemplates: Record<string, string> = {};
+    const qualityGatesSet = new Set<string>();
+    for (const row of harnessConfigRows) {
+      const r = row as any;
+      if (r.task_template) taskTemplates[String(r.harness_id)] = String(r.task_template);
+      try {
+        const gates = JSON.parse(String(r.quality_gates_json ?? "[]")) as string[];
+        for (const g of gates) if (g) qualityGatesSet.add(g);
+      } catch { /* ignore */ }
+    }
+    const qualityGates = Array.from(qualityGatesSet);
+
+    // Build HarnessRegistry with enabled harnesses
+    const harnessRegistry = new HarnessRegistry();
+    if (enabledHarnessIds.has("browser")) {
+      harnessRegistry.register(new BrowserHarness({
+        stealth_open: executor.stealth_open,
+        stealth_scrape: executor.stealth_scrape,
+        stealth_download: executor.stealth_download,
+        ingest_file: executor.ingest_file,
+        rag_retrieve: executor.rag_retrieve,
+      }));
+    }
+    if (enabledHarnessIds.has("claude-code")) {
+      const claudeDetected = await detectCli("claude-code");
+      if (!claudeDetected.installed) {
+        console.warn(`[harness] claude-code CLI not found (${claudeDetected.installCommand}). Skipping registration.`);
+      } else {
+        harnessRegistry.register(new CodeHarness("claude-code", async (opts) => {
+          const workspaceDir = getVaultDir(opts.workspaceDir);
+          if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir, { recursive: true });
+          const result = await spawnCliSubAgent({
+            cli: "claude-code",
+            task: opts.task,
+            context: opts.context,
+            workspaceDir,
+            runId: opts.runId,
+            logPath: opts.logPath,
+            signal: abortController.signal,
+          });
+          return { success: result.success, result: result.result, error: result.error, cliNotFound: result.cliNotFound, installCommand: result.installCommand };
+        }));
+      }
+    }
+    if (enabledHarnessIds.has("codex")) {
+      const codexDetected = await detectCli("codex");
+      if (!codexDetected.installed) {
+        console.warn(`[harness] codex CLI not found (${codexDetected.installCommand}). Skipping registration.`);
+      } else {
+        harnessRegistry.register(new CodeHarness("codex", async (opts) => {
+          const workspaceDir = getVaultDir(opts.workspaceDir);
+          if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir, { recursive: true });
+          const result = await spawnCliSubAgent({
+            cli: "codex",
+            task: opts.task,
+            context: opts.context,
+            workspaceDir,
+            runId: opts.runId,
+            logPath: opts.logPath,
+            signal: abortController.signal,
+          });
+          return { success: result.success, result: result.result, error: result.error, cliNotFound: result.cliNotFound, installCommand: result.installCommand };
+        }));
+      }
+    }
+    if (enabledHarnessIds.has("local")) {
+      harnessRegistry.register(new LocalHarness(async ({ role, task, context, workspaceId: wsId, maxSteps: subMaxSteps = 20 }) => {
+        const subRunId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const subExecutor: ToolExecutor = {
+          stealth_open: executor.stealth_open,
+          stealth_scrape: executor.stealth_scrape,
+          stealth_download: executor.stealth_download,
+          stealth_interact: executor.stealth_interact,
+          stealth_screenshot: executor.stealth_screenshot,
+          stealth_evaluate: executor.stealth_evaluate,
+          stealth_axtree: executor.stealth_axtree,
+          ingest_file: executor.ingest_file,
+          rag_retrieve: executor.rag_retrieve,
+          graph_query: executor.graph_query,
+          generate_document: executor.generate_document,
+          write_note: executor.write_note,
+          recall_skill: executor.recall_skill,
+          store_skill: executor.store_skill,
+          vault_read: executor.vault_read,
+          vault_write: executor.vault_write,
+          vault_link: executor.vault_link,
+          memory_recall: executor.memory_recall,
+          memory_store: executor.memory_store,
+          delegate_task: async () => ({ success: false, error: "Nested delegation not allowed" }),
+        };
+        const systemPrompt = `You are a ${role} sub-agent. Complete the assigned task using available tools. Be thorough and return clear results.\n\nTask from supervisor: ${task}\n\nAdditional context: ${context ?? "None"}`;
+        const subRuntime = new AgentRuntime(
+          { providerConfig, runId: subRunId, workspaceId: wsId, conversationId, maxSteps: subMaxSteps, systemPrompt },
+          subExecutor,
+        );
+        let finalResult = "";
+        const fullPrompt = context ? `Task: ${task}\n\nContext:\n${context}` : task;
+        for await (const event of subRuntime.run(fullPrompt)) {
+          if (event.type === "text" && event.content) finalResult = event.content;
+        }
+        return { success: true, result: finalResult || "(no textual result)" };
+      }));
+    }
+
+    const orchestrationDeps: ConstructorParameters<typeof OrchestrationRuntime>[0] = {
       maxRounds: maxSteps,
+      harnessRegistry,
+      executor: {
+        stealth_open: executor.stealth_open,
+        stealth_scrape: executor.stealth_scrape,
+        stealth_download: executor.stealth_download,
+        ingest_file: executor.ingest_file,
+        rag_retrieve: executor.rag_retrieve,
+      },
       onEvent: async (event) => {
         await sessionDb.appendSessionEvent({
           id: event.id,
@@ -444,33 +593,152 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           };
         }
       },
-      browserTools: {
-        stealth_open: executor.stealth_open,
-        stealth_scrape: executor.stealth_scrape,
-        stealth_download: executor.stealth_download,
-        ingest_file: executor.ingest_file,
-        rag_retrieve: executor.rag_retrieve,
-      },
-      planner: async ({ round, workingSet }) => ({
-        summary: round === 0
-          ? `Collect evidence for ${sessionGoal}`
-          : `Resolve remaining gaps for ${sessionGoal}`,
-        source: round === 0 ? sessionRoot.kind : "xero",
-        query: round === 0 ? sessionRoot.threadSubject : (workingSet.gaps[0] ?? sessionGoal),
-      }),
-      validator: async ({ workingSet }) => ({
-        ok: workingSet.documents.length > 0,
-        gaps: workingSet.documents.length > 0 ? [] : ["No supporting documents collected"],
-      }),
-      judge: async ({ workingSet, validation }) => ({
-        complete: validation.ok && workingSet.documents.length > 0,
-        gaps: validation.gaps.length > 0 ? validation.gaps : (workingSet.documents.length > 0 ? [] : ["Need evidence"]),
-        summary: validation.ok ? "Evidence sufficient" : "Evidence incomplete",
-      }),
-    };
-    const browserOrchestration = new BrowserOrchestrationRuntime(browserOrchestrationDeps);
+      planner: async ({ input: plannerInput, workingSet, round }) => {
+        const { provider, model } = await resolveRoleProvider("planner");
+        const profiles = await db.listProfiles();
+        const systemDomains = profiles
+          .filter((p) => p.target_domains)
+          .flatMap((p) => {
+            try { return JSON.parse(String(p.target_domains)) as string[]; } catch { return []; }
+          })
+          .filter(Boolean);
+        const docsSummary = workingSet.documents.map((d) => `- ${d.title} (${d.source}, confidence: ${Math.round(d.confidence * 100)}%)`).join("\n") || "(none yet)";
+        const gapsText = workingSet.gaps.length > 0 ? workingSet.gaps.join("\n") : "(none yet)";
+        const activeHarnesses = harnessRegistry.all();
+        const harnessesDesc = activeHarnesses.map((h) => `- ${h.id} (${h.type}): ${h.capabilities.map((c) => c.name).join(", ")}`).join("\n") || "(none configured)";
+        const taskTemplateText = Object.entries(taskTemplates).map(([hid, tmpl]) => `  ${hid}: ${tmpl}`).join("\n");
+        const qualityGatesText = qualityGates.length > 0 ? `Quality gates (MUST satisfy all of these):\n${qualityGates.map((g, i) => `${i + 1}. ${g}`).join("\n")}` : "";
+        const prompt = `You are a multi-harness orchestration planner. Output ONLY a JSON array of plan objects.
 
-    const sessionResult = await browserOrchestration.run({
+Goal: ${plannerInput.goal}
+Root context: Outlook thread "${plannerInput.root.threadSubject}" from ${plannerInput.root.mailbox}, threadId=${plannerInput.root.threadId}
+Available harnesses:
+${harnessesDesc}
+Per-harness task templates:
+${taskTemplateText || "(none configured)"}
+${qualityGatesText}
+Authenticated systems: ${systemDomains.length > 0 ? systemDomains.join(", ") : "No specific domains configured"}
+Documents already collected:\n${docsSummary}
+Current gaps:\n${gapsText}
+Round: ${round + 1}
+
+Respond with a JSON array of plan objects. Each object must include "harnessId" matching one of the available harnesses:
+[\n  {\n    "harnessId": "browser|claude-code|codex|local",\n    "summary": "one-sentence plan summary",\n    "source": "sharepoint|xero|monday|outlook|spreadsheet-web|workspace",\n    "query": "specific search query or page path",\n    "url": "full URL to open on target system (or about:blank for non-browser)"\n  }\n]`;
+        const response = await provider.chat({
+          messages: [
+            { role: "system", content: "You are a multi-harness orchestration planner. Respond ONLY with valid JSON array matching the requested format." },
+            { role: "user", content: prompt },
+          ],
+          model,
+          maxTokens: 2048,
+          temperature: 0.2,
+        });
+        const parsed = extractJsonFromResponse(response.content) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed.map((p: unknown) => {
+            const obj = p as Record<string, unknown>;
+            const fallbackUrl = `https://${String(obj?.source ?? plannerInput.root.kind).replace(/[^a-z0-9]/gi, "-").toLowerCase()}.com`;
+            return {
+              harnessId: String(obj?.harnessId ?? "browser"),
+              summary: String(obj?.summary ?? `Step ${round + 1} for ${plannerInput.goal}`),
+              source: String(obj?.source ?? plannerInput.root.kind),
+              query: String(obj?.query ?? plannerInput.goal),
+              url: String(obj?.url ?? fallbackUrl),
+            };
+          });
+        }
+        const fallbackUrl = `https://${String(plannerInput.root.kind).replace(/[^a-z0-9]/gi, "-").toLowerCase()}.com`;
+        return [{
+          harnessId: "browser",
+          summary: `Step ${round + 1} for ${plannerInput.goal}`,
+          source: plannerInput.root.kind,
+          query: plannerInput.goal,
+          url: fallbackUrl,
+        }];
+      },
+      validator: async ({ input: validatorInput, workingSet, plan, harnessResult }) => {
+        const { provider, model } = await resolveRoleProvider("validator");
+        const docsSummary = workingSet.documents.map((d) => `- ${d.title} (${d.source}, ${d.filePath ? "downloaded" : "scraped"})`).join("\n") || "(none)";
+        const prompt = `You are an evidence validator. Output ONLY a JSON object.
+
+Goal: ${validatorInput.goal}
+Plan summary: ${plan.summary}
+Harness result: ${harnessResult.summary}
+Documents collected:\n${docsSummary}
+Observations: ${harnessResult.observations.join("\n") || "(none)"}
+Gaps from harness: ${harnessResult.gaps.join("\n") || "(none)"}
+Total documents in working set: ${workingSet.documents.length}
+
+Respond with JSON:
+{\n  "ok": true or false,\n  "gaps": ["quality issues, missing data, or conflicts"]\n}`;
+        const response = await provider.chat({
+          messages: [
+            { role: "system", content: "You are an evidence validator. Respond ONLY with valid JSON." },
+            { role: "user", content: prompt },
+          ],
+          model,
+          maxTokens: 1024,
+          temperature: 0.1,
+        });
+        const parsed = extractJsonFromResponse(response.content) as Record<string, unknown> | null;
+        return {
+          ok: Boolean(parsed?.ok ?? harnessResult.documents.length > 0),
+          gaps: (Array.isArray(parsed?.gaps) ? parsed.gaps : []).map(String),
+        };
+      },
+      judge: async ({ input: judgeInput, workingSet, validation, plan, harnessResult, allResults }) => {
+        const { provider, model } = await resolveRoleProvider("judge");
+        const docsSummary = workingSet.documents.map((d) => `- ${d.title} (${d.source})`).join("\n") || "(none)";
+        const resultsSummary = allResults.map((r, i) => `Result ${i + 1} (${r.source}): ${r.summary} — gaps: [${r.gaps.join(", ")}]`).join("\n");
+        const gatesText = qualityGates.length > 0 ? `Quality gates:\n${qualityGates.map((g, i) => `${i + 1}. ${g}`).join("\n")}` : "(no quality gates configured)";
+        const prompt = `You are a sufficiency judge and drift detector. Output ONLY a JSON object.
+
+Goal: ${judgeInput.goal}
+Validation result: ok=${validation.ok}, gaps=[${validation.gaps.join(", ") || "none"}]
+Working set documents:\n${docsSummary}
+All harness results:\n${resultsSummary}
+Plan: ${plan.summary} at ${plan.url}
+Primary harness result: ${harnessResult.summary}
+Observations: ${harnessResult.observations.join("\n") || "(none)"}
+Total documents: ${workingSet.documents.length}
+Provenance score: ${Math.round(workingSet.provenanceScore * 100)}%
+${gatesText}
+
+Evaluate:
+1. Is the working set sufficient to deliver the output? (complete)
+2. Are there gaps in evidence? (gaps)
+3. CHECK EACH QUALITY GATE above. If any gate is NOT satisfied, mark complete=false and add the failure description as a gap.
+4. CHECK FOR DRIFT: Do any harness results contradict each other? (driftDetected)
+5. CHECK FOR DRIFT: Is the working set still aligned with the original goal? (driftDetected)
+6. If drift found, add drift-specific gaps.
+
+Respond with JSON:
+{\n  "complete": true or false,\n  "gaps": ["specific missing evidence, or empty if complete"],\n  "driftDetected": true or false,\n  "driftGaps": ["specific drift issues if any"],\n  "summary": "one-sentence rationale"\n}`;
+        const response = await provider.chat({
+          messages: [
+            { role: "system", content: "You are a sufficiency judge and drift detector. Respond ONLY with valid JSON." },
+            { role: "user", content: prompt },
+          ],
+          model,
+          maxTokens: 1024,
+          temperature: 0.1,
+        });
+        const parsed = extractJsonFromResponse(response.content) as Record<string, unknown> | null;
+        const gaps = (Array.isArray(parsed?.gaps) ? parsed.gaps : []).map(String);
+        const driftGaps = (Array.isArray(parsed?.driftGaps) ? parsed.driftGaps : []).map(String);
+        const allGaps = [...gaps, ...driftGaps];
+        return {
+          complete: Boolean(parsed?.complete ?? (validation.ok && allGaps.length === 0 && workingSet.documents.length > 0)),
+          gaps: allGaps,
+          summary: String(parsed?.summary ?? (allGaps.length === 0 ? "Evidence sufficient" : "Evidence incomplete or drift detected")),
+          driftDetected: Boolean(parsed?.driftDetected ?? false),
+          driftGaps,
+        };
+      },
+    };
+    const orchestration = new OrchestrationRuntime(orchestrationDeps);
+
+    const sessionResult = await orchestration.run({
       sessionId,
       workspaceId,
       conversationId,
@@ -479,6 +747,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       supervisionMode: input.supervisionMode ?? "watch",
       root: input.sessionRoot,
       profileId: input.defaultProfileId,
+      qualityGates,
     });
 
     const sessionRunStatus = sessionResult.status;

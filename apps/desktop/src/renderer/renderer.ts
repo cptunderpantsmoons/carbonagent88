@@ -3,6 +3,7 @@ import { clearInspector, clearChat, closeLiveViewport, loadProviders, loadWorksp
 import { renderTopology } from "./topology.js";
 import { renderVault } from "./vault.js";
 import { renderWatcherAnalytics } from "./watcher-analytics.js";
+import { renderHarnesses } from "./views/harnesses-view.js";
 import { renderIngestion } from "./views/ingestion-view.js";
 import { renderOutputs } from "./views/outputs-view.js";
 import { renderPlayground } from "./views/playground-view.js";
@@ -61,6 +62,7 @@ function setActiveView(name: string): void {
 const titleMap: Record<string, string> = {
   playground: "Playground",
   sessions: "Sessions",
+  harnesses: "Harnesses",
   providers: "AI Providers",
   profiles: "Cloak Bridge",
   workspaces: "Workspaces",
@@ -90,6 +92,7 @@ function getCommandPaletteItems(): CommandPaletteItem[] {
   return [
     { group: "Navigation", iconClass: "icon-playground", label: "Go to Playground", action: () => setActiveView("playground"), shortcut: "G P" },
     { group: "Navigation", iconClass: "icon-session", label: "Go to Sessions", action: () => setActiveView("sessions"), shortcut: "G E" },
+    { group: "Navigation", iconClass: "icon-profile", label: "Go to Harnesses", action: () => setActiveView("harnesses"), shortcut: "G H" },
     { group: "Navigation", iconClass: "icon-providers", label: "Go to AI Providers", action: () => setActiveView("providers"), shortcut: "G A" },
     { group: "Navigation", iconClass: "icon-profile", label: "Go to Cloak Bridge", action: () => setActiveView("profiles"), shortcut: "G C" },
     { group: "Navigation", iconClass: "icon-workspace", label: "Go to Workspaces", action: () => setActiveView("workspaces"), shortcut: "G W" },
@@ -266,6 +269,7 @@ async function init(): Promise<void> {
 
   registerView("playground", { render: renderPlayground });
   registerView("sessions", { render: renderSessionView, onHide: cleanupSessionView });
+  registerView("harnesses", { render: renderHarnesses });
   registerView("providers", { render: renderProviders });
   registerView("profiles", { render: renderProfiles });
   registerView("workspaces", { render: renderWorkspaces });

@@ -1,14 +1,28 @@
 import initSqlJs from "sql.js";
 import type { Database, SqlJsStatic } from "sql.js";
+import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import { getDatabasePath } from "./paths.js";
 import { fileURLToPath } from "node:url";
 import { encrypt, decrypt } from "./crypto.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const wasmDir = path.join(__dirname, "..", "node_modules", "sql.js", "dist");
+
+function resolveWasmDir(): string {
+  try {
+    const require = createRequire(import.meta.url);
+    const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
+    return path.dirname(wasmPath);
+  } catch {
+    // Fallback for when sql.js is not resolvable via node_modules
+    return path.join(__dirname, "..", "node_modules", "sql.js", "dist");
+  }
+}
+
+const wasmDir = resolveWasmDir();
 
 /**
  * SQLite Database Adapter (sql.js)
@@ -192,6 +206,19 @@ function initTables(): void {
       last_run_at TEXT, last_run_status TEXT CHECK(last_run_status IN ('success','failed','running','pending')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS harness_configs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      harness_id TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      task_template TEXT,
+      quality_gates_json TEXT NOT NULL DEFAULT '[]',
+      extra_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(workspace_id, harness_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_harness_configs_workspace ON harness_configs(workspace_id);
   `);
   ensureBrowserProfileColumns();
   ensureWatcherColumns();
@@ -285,6 +312,18 @@ export class CarbonDatabase {
     const db = await ensureDb();
     runStmt(db, "INSERT INTO workspaces (id, name, description, vault_dir) VALUES (?, ?, ?, ?)",
       [p.id, p.name, p.description ?? null, p.vaultDir]);
+    const defaultHarnesses = [
+      { id: crypto.randomUUID(), harnessId: "browser",      taskTemplate: "Collect evidence from authenticated browser portals. Use stealth_open, stealth_scrape, and stealth_download tools. Focus on financial records, invoices, and compliance documents." },
+      { id: crypto.randomUUID(), harnessId: "claude-code", taskTemplate: "Refactor, edit, and generate code across the workspace. Use terminal and file editing tools. Ensure tests pass and code style is consistent." },
+      { id: crypto.randomUUID(), harnessId: "codex",       taskTemplate: "Generate new modules and analyze code autonomously. Sandboxed to the workspace. Multi-file changes with analysis notes." },
+      { id: crypto.randomUUID(), harnessId: "local",       taskTemplate: "Research topics, extract structured data from text, and draft documents. Use reasoning and synthesis capabilities." },
+    ];
+    for (const h of defaultHarnesses) {
+      runStmt(db,
+        `INSERT INTO harness_configs (id, workspace_id, harness_id, enabled, task_template, quality_gates_json, extra_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [h.id, p.id, h.harnessId, 1, h.taskTemplate, "[]", "{}"]);
+    }
   }
 
   async getProvider(id: string) {
@@ -699,6 +738,49 @@ export class CarbonDatabase {
     if (p.lastRunStatus !== undefined) { fields.push("last_run_status = ?"); vals.push(p.lastRunStatus); }
     vals.push(p.id);
     runStmt(db, `UPDATE watchers SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async listHarnessConfigs(workspaceId: string) {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM harness_configs WHERE workspace_id = ? ORDER BY harness_id", [workspaceId]);
+  }
+
+  async getHarnessConfig(workspaceId: string, harnessId: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM harness_configs WHERE workspace_id = ? AND harness_id = ?", [workspaceId, harnessId]);
+  }
+
+  async upsertHarnessConfig(p: {
+    id: string;
+    workspaceId: string;
+    harnessId: string;
+    enabled?: boolean;
+    taskTemplate?: string;
+    qualityGatesJson?: string;
+    extraJson?: string;
+  }) {
+    const db = await ensureDb();
+    const existing = getRow(db, "SELECT id FROM harness_configs WHERE workspace_id = ? AND harness_id = ?", [p.workspaceId, p.harnessId]);
+    if (existing) {
+      const fields: string[] = ["updated_at = datetime('now')"];
+      const vals: unknown[] = [];
+      if (p.enabled !== undefined) { fields.push("enabled = ?"); vals.push(p.enabled ? 1 : 0); }
+      if (p.taskTemplate !== undefined) { fields.push("task_template = ?"); vals.push(p.taskTemplate); }
+      if (p.qualityGatesJson !== undefined) { fields.push("quality_gates_json = ?"); vals.push(p.qualityGatesJson); }
+      if (p.extraJson !== undefined) { fields.push("extra_json = ?"); vals.push(p.extraJson); }
+      vals.push(existing.id as string);
+      runStmt(db, `UPDATE harness_configs SET ${fields.join(", ")} WHERE id = ?`, vals);
+    } else {
+      runStmt(db,
+        `INSERT INTO harness_configs (id, workspace_id, harness_id, enabled, task_template, quality_gates_json, extra_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [p.id, p.workspaceId, p.harnessId, p.enabled !== undefined ? (p.enabled ? 1 : 0) : 1, p.taskTemplate ?? null, p.qualityGatesJson ?? "[]", p.extraJson ?? "{}"]);
+    }
+  }
+
+  async deleteHarnessConfig(id: string) {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM harness_configs WHERE id = ?", [id]);
   }
 
   async deleteWatcher(id: string) {

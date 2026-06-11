@@ -14,10 +14,12 @@ export class CustomOpenAIProvider implements LLMProvider {
   readonly name: string;
   readonly type = "custom-openai";
   private client: OpenAI;
+  private model: string;
 
   constructor(config: AIProviderConfig) {
     this.id = config.id;
     this.name = config.name;
+    this.model = config.model;
     if (!config.baseUrl) {
       throw new Error("Custom OpenAI provider requires baseUrl");
     }
@@ -101,7 +103,7 @@ export class CustomOpenAIProvider implements LLMProvider {
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
     try {
       await this.client.chat.completions.create({
-        model: "gpt-4o-mini", // generic model for test
+        model: this.model,
         messages: [{ role: "user", content: "Hi" }],
         max_tokens: 1,
       });

@@ -34,7 +34,12 @@
     },
     "files": [
       "dist/**/*",
-      "src/renderer/**/*"
+      "src/renderer/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/sql.js/dist/*.wasm"
     ],
     "win": {
       "target": "nsis",

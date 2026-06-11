@@ -25,8 +25,8 @@ function createRuntime(overrides: Partial<ConstructorParameters<typeof BrowserOr
       delegateSpecialist,
       browserTools,
       planner: vi.fn()
-        .mockResolvedValueOnce({ summary: "Search SharePoint for linked budget", source: "sharepoint", query: "Month end close budget" })
-        .mockResolvedValueOnce({ summary: "Search Xero for invoice totals", source: "xero", query: "Acme invoice totals" }),
+        .mockResolvedValueOnce([{ summary: "Search SharePoint for linked budget", source: "sharepoint", query: "Month end close budget", url: "https://tenant.sharepoint.com/_layouts/15/search.aspx?q=Month+end+close+budget" }])
+        .mockResolvedValueOnce([{ summary: "Search Xero for invoice totals", source: "xero", query: "Acme invoice totals", url: "https://go.xero.com/AccountsReceivable/Search.aspx?q=Acme" }]),
       validator: vi.fn().mockResolvedValue({ ok: true, gaps: [] }),
       judge: vi.fn()
         .mockResolvedValueOnce({ complete: false, gaps: ["Need Xero totals"], summary: "Evidence is incomplete" })

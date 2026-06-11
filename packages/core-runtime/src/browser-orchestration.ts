@@ -62,6 +62,7 @@ export interface BrowserPlan {
   summary: string;
   source: string;
   query: string;
+  url: string;
 }
 
 export interface BrowserCollectionResult {
@@ -97,7 +98,7 @@ export interface BrowserOrchestrationRuntimeDeps {
     ingest_file(input: { filePath: string; workspaceId: string; sourceUrl?: string; profileId?: string }): Promise<unknown>;
     rag_retrieve(input: { query: string; workspaceId: string; limit?: number }): Promise<unknown>;
   };
-  planner(input: BrowserOrchestrationPlannerInput): Promise<BrowserPlan>;
+  planner(input: BrowserOrchestrationPlannerInput): Promise<BrowserPlan[]>;
   validator(input: BrowserOrchestrationValidatorInput): Promise<BrowserValidationResult>;
   judge(input: BrowserOrchestrationJudgeInput): Promise<{ complete: boolean; gaps: string[]; summary: string }>;
   maxRounds?: number;
@@ -174,18 +175,13 @@ function chooseSpecialistRole(goal: string): "claude-code" | "codex" | "general"
   return "general";
 }
 
-function buildBrowserUrl(source: string, query: string): string {
-  const sourceSlug = source.replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
-  return `https://browser-orchestration.local/${sourceSlug}?q=${encodeURIComponent(query)}`;
-}
-
 async function collectWithBrowserTools(
   input: BrowserOrchestrationInput,
   plan: BrowserPlan,
   browserTools: BrowserOrchestrationRuntimeDeps["browserTools"],
 ): Promise<BrowserCollectionResult> {
   const profileId = input.profileId ?? input.workspaceId;
-  const url = buildBrowserUrl(plan.source, plan.query);
+  const url = plan.url;
 
   await browserTools.stealth_open({ profileId, url });
   const scrapeResult = await browserTools.stealth_scrape({ profileId, url });
@@ -220,7 +216,9 @@ async function collectWithBrowserTools(
     metrics.push({ kind: "retrieval", source: plan.source, query: plan.query, result: retrieval });
   }
 
-  if (plan.source === "xero" || /invoice|statement|report|spreadsheet/i.test(plan.query)) {
+  const urlLooksLikeDownload = /\.(pdf|xlsx?|csv|docx?)([?#].*)?$/i.test(url);
+  const looksLikeDownloadPage = observations.length > 0 && observations[0].length < 200 && /download|export|save/i.test(observations[0]);
+  if (urlLooksLikeDownload || looksLikeDownloadPage) {
     const download = await browserTools.stealth_download({ profileId, url, filename: `${plan.source}-${Date.now()}.bin` });
     if (download && typeof download === "object" && "filePath" in download && typeof (download as { filePath?: unknown }).filePath === "string") {
       const filePath = String((download as { filePath?: string }).filePath ?? "");
@@ -315,7 +313,8 @@ export class BrowserOrchestrationRuntime {
     });
 
     for (let round = 0; round < maxRounds; round += 1) {
-      lastPlan = await this.deps.planner({ input, workingSet, round });
+      const plans = await this.deps.planner({ input, workingSet, round });
+      lastPlan = plans[0] ?? null;
       await this.emit({
         sessionId: input.sessionId,
         role: "planner",
