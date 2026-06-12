@@ -96,7 +96,7 @@ export function createProvider(config: AIProviderConfig): LLMProvider {
     case "custom-openai":
       return new CustomOpenAIProvider(config);
     default:
-      throw new Error(`Unsupported provider type: ${(config as any).type}`);
+      throw new Error(`Unsupported provider type: ${(config as { type?: string }).type}`);
   }
 }
 

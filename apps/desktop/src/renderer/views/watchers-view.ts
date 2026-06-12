@@ -103,7 +103,7 @@ export function renderWatchers(container: HTMLElement): void {
           cronExpression: cronInput.value.trim(),
           enabled: true,
         },
-      } as any) as any;
+      });
       if (resp.type === "watcher/create.success") {
         Toast.show("Watcher created", "success");
         await renderWatcherList();
@@ -125,20 +125,20 @@ async function renderWatcherList(): Promise<void> {
   if (!list) return;
 
   try {
-    const resp = await window.carbonAPI.invoke({ type: "watcher/list" } as any) as any;
+    const resp = await window.carbonAPI.invoke({ type: "watcher/list" });
     if (resp.type !== "watcher/list.success") return;
 
-    const watchers = resp.data ?? [];
+    const watchers = ((resp.data as unknown[] | undefined) ?? []) as Array<Record<string, unknown>>;
     list.innerHTML = "";
     if (watchers.length === 0) {
       list.appendChild(createEmptyState("", "No watchers", "Create a watcher to run background tasks on schedule."));
       return;
     }
 
-    for (const watcher of watchers as any[]) {
+    for (const watcher of watchers) {
       const card = document.createElement("div");
       card.className = "watcher-card";
-      const enabled = Boolean(watcher.enabled ?? watcher.enabled === 1);
+      const enabled = Boolean(watcher["enabled"] ?? Number(watcher["enabled"]) === 1);
       const statusLabel = watcher.lastRunStatus === "success" || watcher.last_run_status === "success"
         ? "Healthy"
         : watcher.lastRunStatus === "failed" || watcher.last_run_status === "failed"
@@ -181,7 +181,7 @@ async function renderWatcherList(): Promise<void> {
       const toggle = card.querySelector(".watcher-toggle") as HTMLInputElement;
       toggle.addEventListener("change", async () => {
         try {
-          await window.carbonAPI.invoke({ type: "watcher/toggle", id: watcher.id } as any);
+          await window.carbonAPI.invoke({ type: "watcher/toggle", id: watcher.id });
           Toast.show(enabled ? "Watcher disabled" : "Watcher enabled", "info");
         } catch (error: unknown) {
           Toast.show(`Error: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -191,7 +191,7 @@ async function renderWatcherList(): Promise<void> {
       card.querySelector('[data-action="run"]')?.addEventListener("click", async () => {
         Toast.show(`Triggering ${watcherName}...`, "info");
         try {
-          await window.carbonAPI.invoke({ type: "watcher/run", id: watcher.id } as any);
+          await window.carbonAPI.invoke({ type: "watcher/run", id: watcher.id });
           Toast.show("Watcher triggered", "success");
         } catch (error: unknown) {
           Toast.show(`Error: ${error instanceof Error ? error.message : String(error)}`, "error");

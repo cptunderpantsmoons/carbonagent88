@@ -304,7 +304,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "provider/create.success", data: mapProviderRow(created as Record<string, unknown> | undefined) };
       }
       case "provider/update": {
-        await d.updateProvider({ id: request.id, type: request.data.type, name: request.data.name, apiKey: request.data.apiKey, baseUrl: request.data.baseUrl, model: request.data.model });
+        await d.updateProvider(request.id, { type: request.data.type, name: request.data.name, apiKey: request.data.apiKey, baseUrl: request.data.baseUrl, model: request.data.model });
         const updated = await d.getProvider(request.id);
         return { type: "provider/update.success", data: mapProviderRow(updated as Record<string, unknown> | undefined) };
       }
@@ -332,10 +332,10 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           id,
           name: request.data.name,
           description: request.data.description,
-          profileDir: request.data.profileDir,
+          profileDir: request.data.profileDir ?? "",
           cdpUrl: request.data.cdpUrl,
           cdpFingerprint: request.data.cdpFingerprint,
-          targetDomains: request.data.targetDomains,
+          targetDomains: request.data.targetDomains ?? ["*"],
         });
         const created = await d.getProfile(id);
         return { type: "profile/create.success", data: created };
@@ -348,7 +348,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         if (request.data.cdpUrl !== undefined) updateData.cdpUrl = request.data.cdpUrl;
         if (request.data.cdpFingerprint !== undefined) updateData.cdpFingerprint = request.data.cdpFingerprint;
         if (request.data.targetDomains !== undefined) updateData.targetDomains = request.data.targetDomains;
-        await d.updateProfile({ id: request.id, ...updateData } as Parameters<CarbonDatabase["updateProfile"]>[0]);
+        await d.updateProfile(request.id, updateData);
         const updated = await d.getProfile(request.id);
         return { type: "profile/update.success", data: updated };
       }
@@ -362,14 +362,14 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         const domains = JSON.parse((row.target_domains as string) || "[]") as string[];
         if (domains.length === 0) return { type: "profile/health.success", status: "unknown", lastCheckedAt: row.last_checked_at as string | null };
         const result = await checkSessionHealth(request.id, row.profile_dir as string, domains[0]!);
-        await d.updateProfile({ id: request.id, status: result.status, lastCheckedAt: new Date().toISOString() });
+        await d.updateProfile(request.id, { status: result.status, lastCheckedAt: new Date().toISOString() });
         return { type: "profile/health.success", status: result.status, lastCheckedAt: new Date().toISOString() };
       }
       case "profile/launchLogin": {
         const row = await d.getProfile(request.id);
         if (!row) return { type: "error", error: "Profile not found", code: "PROFILE_NOT_FOUND" };
         const result = await launchLoginPortal(request.id, row.profile_dir as string);
-        if (result.success) await d.updateProfile({ id: request.id, status: "active" });
+        if (result.success) await d.updateProfile(request.id, { status: "active" });
         return { type: "profile/launchLogin.success" };
       }
       case "profile/lock": {
@@ -377,13 +377,13 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         if (!row) return { type: "error", error: "Profile not found", code: "PROFILE_NOT_FOUND" };
         const cdpUrl = row.cdp_url as string | undefined;
         await lockProfile(request.id, (row.profile_dir as string) ?? "", cdpUrl ?? undefined);
-        await d.updateProfile({ id: request.id, status: "locked" });
+        await d.updateProfile(request.id, { status: "locked" });
         await startProfileTelemetry(request.id);
         return { type: "profile/lock.success" };
       }
       case "profile/unlock": {
         await unlockProfile(request.id);
-        await d.updateProfile({ id: request.id, status: "active" });
+        await d.updateProfile(request.id, { status: "active" });
         stopProfileTelemetry(request.id);
         return { type: "profile/unlock.success" };
       }
@@ -556,8 +556,8 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       // ==================== Ingestion ====================
       case "ingestion/scan": {
         const files = scanDocumentsDir();
-        return { type: "ingestion/scan.success", jobs: files.map((_file) => ({
-          id: crypto.randomUUID(), documentId: crypto.randomUUID(), status: "pending" as const, chunksCreated: 0, error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        return { type: "ingestion/scan.success", jobs: files.map((file) => ({
+          id: crypto.randomUUID(), documentId: crypto.randomUUID(), status: "pending" as const, chunksCreated: 0, error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), originalName: file.name, fileType: file.mimeType, size: file.sizeBytes,
         })) };
       }
       case "ingestion/retry": {
@@ -579,7 +579,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       }
       case "watcher/update": {
         const data = request.data;
-        await d.updateWatcher({ id: request.id, name: data.name, profileId: data.profileId, cronExpression: data.cronExpression, prompt: data.prompt, enabled: data.enabled });
+        await d.updateWatcher(request.id, { name: data.name, profileId: data.profileId, cronExpression: data.cronExpression, prompt: data.prompt, enabled: data.enabled });
         await getWatcherManager().sync(request.id);
         const updated = await d.getWatcher(request.id);
         return { type: "watcher/update.success", data: mapWatcherRow(updated as Record<string, unknown>) };
@@ -588,7 +588,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         const row = await d.getWatcher(request.id);
         if (!row) return { type: "error", error: "Watcher not found", code: "NOT_FOUND" };
         const newEnabled = !(row.enabled === 1 || row.enabled === true);
-        await d.updateWatcher({ id: request.id, enabled: newEnabled });
+        await d.updateWatcher(request.id, { enabled: newEnabled });
         await getWatcherManager().sync(request.id);
         return { type: "watcher/toggle.success", data: { id: request.id, enabled: newEnabled } };
       }
@@ -725,7 +725,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
 
       // ==================== Harness Configs ====================
       case "harness-configs/list": {
-        const rows = await (d as any).listHarnessConfigs(request.workspaceId);
+        const rows = await d.listHarnessConfigs(request.workspaceId);
         const defaults: Array<{ harnessId: string; enabled: boolean; taskTemplate: string | null; qualityGates: string[]; extraJson: Record<string, unknown> }> = [
           { harnessId: "browser",      enabled: true, taskTemplate: "Collect evidence from authenticated browser portals. Use stealth_open, stealth_scrape, and stealth_download tools.", qualityGates: ["At least 2 distinct sources must corroborate key claims"], extraJson: {} },
           { harnessId: "claude-code",  enabled: true, taskTemplate: "Refactor, edit, and generate code across the workspace. Use terminal and file editing tools.", qualityGates: [], extraJson: {} },
@@ -733,7 +733,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           { harnessId: "local",        enabled: true, taskTemplate: "Research topics, extract structured data from text, and draft documents. Use reasoning and synthesis.", qualityGates: [], extraJson: {} },
         ];
         const byId = new Map<string, Record<string, unknown>>();
-        for (const row of rows) byId.set(String((row as any).harness_id), row as Record<string, unknown>);
+        for (const row of rows) byId.set(String(row.harness_id), row as unknown as Record<string, unknown>);
         const data = defaults.map((def) => {
           const row = byId.get(def.harnessId);
           if (row) return mapHarnessConfigRow(row);
@@ -752,12 +752,12 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "harness-configs/list.success", data };
       }
       case "harness-configs/get": {
-        const row = await (d as any).getHarnessConfig(request.workspaceId, request.harnessId);
+        const row = await d.getHarnessConfig(request.workspaceId, request.harnessId);
         if (!row) return { type: "harness-configs/get.success", data: null };
-        return { type: "harness-configs/get.success", data: mapHarnessConfigRow(row as Record<string, unknown>) };
+        return { type: "harness-configs/get.success", data: mapHarnessConfigRow(row as unknown as Record<string, unknown>) };
       }
       case "harness-configs/update": {
-        await (d as any).upsertHarnessConfig({
+        await d.upsertHarnessConfig({
           id: request.id,
           workspaceId: request.workspaceId,
           harnessId: request.harnessId,
@@ -766,8 +766,8 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           qualityGatesJson: request.data.qualityGates ? JSON.stringify(request.data.qualityGates) : undefined,
           extraJson: request.data.extraJson ? JSON.stringify(request.data.extraJson) : undefined,
         });
-        const row = await (d as any).getHarnessConfig(request.workspaceId, request.harnessId);
-        return { type: "harness-configs/update.success", data: mapHarnessConfigRow(row as Record<string, unknown>) };
+        const row = await d.getHarnessConfig(request.workspaceId, request.harnessId);
+        return { type: "harness-configs/update.success", data: mapHarnessConfigRow(row as unknown as Record<string, unknown>) };
       }
 
       // ==================== Stats ====================

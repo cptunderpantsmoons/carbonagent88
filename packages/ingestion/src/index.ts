@@ -291,14 +291,15 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
 // ---------------------------------------------------------------------------
 
 // Dynamically imported to avoid build-time dependency
-let embedDb: any = null;
-let embedSql: any = null;
+import type { Database, SqlJsStatic } from "sql.js";
+let embedDb: Database | null = null;
+let embedSql: SqlJsStatic | null = null;
 
 function getEmbeddingsDbPath(): string {
   return path.join(os.homedir(), ".carbon-agent", "embeddings.db");
 }
 
-async function ensureEmbedDb(): Promise<any> {
+async function ensureEmbedDb(): Promise<Database> {
   if (embedDb) return embedDb;
   const { default: initSqlJs } = await import("sql.js");
   embedSql = await initSqlJs({ locateFile: (f: string) => f });

@@ -20,10 +20,8 @@ export class SemanticEmbeddingProvider implements EmbeddingProvider {
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const pipe = await getPipeline();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    type AnyPipe = (input: any, options?: any) => Promise<any>;
+    type AnyPipe = (input: string[], options?: Record<string, unknown>) => Promise<unknown>;
     const output = await (pipe as AnyPipe)(texts, { pooling: "mean", normalize: true });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const out = output as unknown as { data: Float32Array | number[]; dims: number[] };
     // Batch output: Tensor with dims [batch_size, 384]
     const flat = Array.from(out.data);

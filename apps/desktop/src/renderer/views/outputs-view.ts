@@ -97,12 +97,13 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
   }
 
   try {
-    const resp = await window.carbonAPI.invoke({ type: "document/list", workspaceId } as any) as any;
+    const resp = await window.carbonAPI.invoke({ type: "document/list", workspaceId });
     if (resp.type !== "document/list.success") return;
 
-    let docs = resp.data ?? [];
+    const _rawDocs = ((resp.data as unknown[] | undefined) ?? []) as Array<Record<string, unknown>>;
+    let docs = _rawDocs;
     if (format && format !== "all") {
-      docs = docs.filter((doc: { format?: string }) => String(doc.format || "").toLowerCase() === format);
+      docs = docs.filter((doc) => String(doc["format"] || "").toLowerCase() === format);
     }
     if (countEl) countEl.textContent = `${docs.length} output${docs.length === 1 ? "" : "s"}`;
 
@@ -111,7 +112,7 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
       return;
     }
 
-    for (const doc of docs as any[]) {
+    for (const doc of docs as Array<Record<string, unknown>>) {
       const fmt = String(doc.format || "unknown").toUpperCase();
       const fmtClass = fmt === "MD" ? "success" : fmt === "DOCX" ? "info" : fmt === "PDF" ? "warning" : "unknown";
       const card = document.createElement("div");
@@ -125,7 +126,7 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
           <span>${new Date(String(doc.createdAt ?? doc.created_at)).toLocaleDateString()}</span>
           <span>${escapeHtml(String(doc.filePath ?? doc.file_path ?? ""))}</span>
         </div>
-        <div class="output-shelf-preview">${escapeHtml(String((doc.preview || doc.content || "").slice(0, 120)))}</div>
+        <div class="output-shelf-preview">${escapeHtml(String(((doc["preview"] ?? doc["content"] ?? "") as string).slice(0, 120)))}</div>
         <div class="output-shelf-actions">
           <button class="btn btn-ghost btn-sm" data-action="open">Open</button>
           <button class="btn btn-ghost btn-sm" data-action="reveal">Reveal</button>
@@ -134,13 +135,13 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
       `;
 
       card.querySelector('[data-action="open"]')?.addEventListener("click", async () => {
-        const result = await window.carbonAPI.invoke({ type: "document/open", filePath: String(doc.filePath ?? doc.file_path ?? "") } as any) as any;
+        const result = await window.carbonAPI.invoke({ type: "document/open", filePath: String(doc.filePath ?? doc.file_path ?? "") });
         if (result.type === "error") {
           Toast.show(String(result.error), "error");
         }
       });
       card.querySelector('[data-action="reveal"]')?.addEventListener("click", async () => {
-        const result = await window.carbonAPI.invoke({ type: "document/reveal", filePath: String(doc.filePath ?? doc.file_path ?? "") } as any) as any;
+        const result = await window.carbonAPI.invoke({ type: "document/reveal", filePath: String(doc.filePath ?? doc.file_path ?? "") });
         if (result.type === "error") {
           Toast.show(String(result.error), "error");
         }

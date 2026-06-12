@@ -124,7 +124,7 @@ export function renderProfiles(container: HTMLElement): void {
     saveBtn.disabled = true;
     saveBtn.textContent = "Creating...";
     try {
-      const resp = await window.carbonAPI.invoke({ type: "profile/create", data: payload } as any) as any;
+      const resp = await window.carbonAPI.invoke({ type: "profile/create", data: payload });
       if (resp.type === "error") Toast.show(String(resp.error), "error");
       else {
         Toast.show("Profile created", "success");
@@ -176,7 +176,7 @@ async function renderProfileList(): Promise<void> {
     loginBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
       try {
-        const resp = await window.carbonAPI.invoke({ type: "profile/launchLogin", id: profile.id } as any) as any;
+        const resp = await window.carbonAPI.invoke({ type: "profile/launchLogin", id: profile.id });
         Toast.show(resp.type === "error" ? `Launch failed: ${resp.error}` : "Login portal launched", resp.type === "error" ? "error" : "info");
         void renderProfileList();
       } catch (error: unknown) {
@@ -187,7 +187,7 @@ async function renderProfileList(): Promise<void> {
     healthBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
       try {
-        const resp = await window.carbonAPI.invoke({ type: "profile/health", id: profile.id } as any) as any;
+        const resp = await window.carbonAPI.invoke({ type: "profile/health", id: profile.id });
         Toast.show(resp.type === "profile/health.success" ? `Status: ${resp.status}` : `Health check failed: ${resp.error}`, resp.type === "profile/health.success" ? "info" : "error");
         void renderProfileList();
       } catch (error: unknown) {
@@ -198,7 +198,7 @@ async function renderProfileList(): Promise<void> {
     watchBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
       try {
-        await window.carbonAPI.invoke({ type: "profile/lock", id: profile.id } as any);
+        await window.carbonAPI.invoke({ type: "profile/lock", id: profile.id });
         openLiveViewport(profile.id);
         Toast.show("Viewport streaming started", "info");
       } catch (error: unknown) {
@@ -211,7 +211,7 @@ async function renderProfileList(): Promise<void> {
       const ok = await Modal.confirm("Delete profile?", `Remove \"${profile.name}\"?`);
       if (!ok) return;
       try {
-        await window.carbonAPI.invoke({ type: "profile/delete", id: profile.id } as any);
+        await window.carbonAPI.invoke({ type: "profile/delete", id: profile.id });
         Toast.show("Profile deleted", "success");
         void renderProfileList();
       } catch (error: unknown) {

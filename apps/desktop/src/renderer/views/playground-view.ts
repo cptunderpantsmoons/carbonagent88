@@ -36,9 +36,9 @@ function getEnabledHarnesses(configs: HarnessConfigFromIPC[]): string[] {
 }
 
 async function loadHarnessConfigs(workspaceId: string): Promise<HarnessConfigFromIPC[]> {
-  const resp = await window.carbonAPI.invoke({ type: "harness-configs/list", workspaceId } as any);
-  if (resp && typeof resp === "object" && (resp as any).type === "harness-configs/list.success") {
-    return ((resp as any).data as HarnessConfigFromIPC[]) ?? [];
+  const resp = await window.carbonAPI.invoke({ type: "harness-configs/list", workspaceId });
+  if (resp && resp.type === "harness-configs/list.success") {
+    return (resp.data as unknown as HarnessConfigFromIPC[]) ?? [];
   }
   return [];
 }
@@ -151,7 +151,7 @@ export function renderPlayground(container: HTMLElement): void {
             workspaceId: config.workspaceId,
             harnessId: config.harnessId,
             data: { enabled: newEnabled },
-          } as any);
+          });
           const reloaded = await loadHarnessConfigs(config.workspaceId);
           harnessConfigs = reloaded;
           harnessConfigMap = new Map(reloaded.map((c) => [c.harnessId, c]));
@@ -370,9 +370,9 @@ export function renderPlayground(container: HTMLElement): void {
 
     try {
       if (!appState.currentConversationId) {
-        const convResp = await window.carbonAPI.invoke({ type: "conversation/create", workspaceId: appState.currentWorkspaceId } as any) as any;
+        const convResp = await window.carbonAPI.invoke({ type: "conversation/create", workspaceId: appState.currentWorkspaceId });
         if (convResp.type === "conversation/create.success") {
-          appState.currentConversationId = convResp.data.id;
+          appState.currentConversationId = (convResp.data as Record<string, unknown>).id as string;
         } else {
           throw new Error(convResp.error || "Failed to create conversation");
         }
@@ -382,26 +382,26 @@ export function renderPlayground(container: HTMLElement): void {
         type: "run/create",
         conversationId: appState.currentConversationId as string,
         providerId: provSelect.value || null,
-      } as any) as any;
+      });
       if (runResp.type !== "run/create.success") throw new Error(String(runResp.error ?? "Failed to create run"));
 
       const sessionResp = await window.carbonAPI.invoke({
         type: "session/create",
         workspaceId: appState.currentWorkspaceId,
         conversationId: appState.currentConversationId,
-        runId: runResp.data.id,
+        runId: (runResp.data as Record<string, unknown>).id as string,
         root: { kind: "outlook-thread", threadId, threadSubject, mailbox },
         supervisionMode: supervisionSelect.value || "watch",
         goal,
-      } as any) as any;
+      });
       if (sessionResp.type !== "session/create.success") {
         throw new Error(String(sessionResp.error ?? "Failed to create session"));
       }
 
-      appState.currentRunId = sessionResp.data.runId;
-      appState.currentSessionId = sessionResp.data.id;
+      appState.currentRunId = (sessionResp.data as Record<string, unknown>).runId as string;
+      appState.currentSessionId = (sessionResp.data as Record<string, unknown>).id as string;
 
-      const sessionMessage = createChatMessage("system", `Mission ${sessionResp.data.id} created for ${threadSubject}.`);
+      const sessionMessage = createChatMessage("system", `Mission ${(sessionResp.data as Record<string, unknown>).id as string} created for ${threadSubject}.`);
       const viewSessionBtn = document.createElement("button");
       viewSessionBtn.className = "btn btn-ghost btn-sm mt-6";
       viewSessionBtn.textContent = "View Mission";
@@ -409,17 +409,17 @@ export function renderPlayground(container: HTMLElement): void {
       sessionMessage.appendChild(viewSessionBtn);
       messages.appendChild(sessionMessage);
 
-      const startResp = await window.carbonAPI.invoke({ type: "session/start", id: sessionResp.data.id } as any) as any;
+      const startResp = await window.carbonAPI.invoke({ type: "session/start", id: (sessionResp.data as Record<string, unknown>).id as string });
       if (startResp.type === "session/start.success") {
-        if (startResp.data.fullResponse) {
-          messages.appendChild(createChatMessage("assistant", startResp.data.fullResponse));
+        if ((startResp.data as Record<string, unknown>).fullResponse as string) {
+          messages.appendChild(createChatMessage("assistant", (startResp.data as Record<string, unknown>).fullResponse as string));
         }
-        if (startResp.data.runStatus !== "completed") {
-          addSystemMessage(messages, startResp.data.runError || `Mission ${startResp.data.runStatus}.`);
+        if ((startResp.data as Record<string, unknown>).runStatus as string !== "completed") {
+          addSystemMessage(messages, (startResp.data as Record<string, unknown>).runError as string | undefined || `Mission ${(startResp.data as Record<string, unknown>).runStatus as string}.`);
         } else {
           addSystemMessage(messages, "Mission completed.");
         }
-        if (runStatusText) runStatusText.textContent = `Mission ${startResp.data.runStatus}`;
+        if (runStatusText) runStatusText.textContent = `Mission ${(startResp.data as Record<string, unknown>).runStatus as string}`;
       } else {
         throw new Error(String(startResp.error ?? "Failed to start session"));
       }

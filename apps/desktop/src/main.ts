@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { WatcherManager } from "./watcher-manager.js";
 import { setWatcherManager } from "./ipc-handlers.js";
 import { setMainWindow } from "./desktop-events.js";
+import { initAutoUpdater } from "./auto-updater.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +27,7 @@ app.whenReady().then(async () => {
   const wm = new WatcherManager();
   setWatcherManager(wm);
   await wm.initAll();
+  await initAutoUpdater();
 });
 
 app.on("before-quit", async () => {

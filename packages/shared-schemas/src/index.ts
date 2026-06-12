@@ -327,6 +327,9 @@ export const IngestionJobSchema = z.object({
   error: z.string().max(2048).nullable(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
+  originalName: z.string().optional(),
+  fileType: z.string().optional(),
+  size: z.number().optional(),
 });
 
 export type IngestionJob = z.infer<typeof IngestionJobSchema>;

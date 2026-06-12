@@ -272,8 +272,8 @@ Always cite your sources when answering from retrieved documents.`;
           maxTokens: 4096,
           temperature: 0.7,
         });
-      } catch (err: any) {
-        const errorMsg = `LLM error: ${err.message ?? String(err)}`;
+      } catch (err: unknown) {
+        const errorMsg = `LLM error: ${err instanceof Error ? err.message : String(err)}`;
         this.logEvent(runLogPath, makeEvent(this.config.runId, "llm_error", { error: errorMsg }));
         yield { type: "error", error: errorMsg };
         return;
@@ -301,8 +301,8 @@ Always cite your sources when answering from retrieved documents.`;
           try {
             output = await this.executeTool(tc.name, tc.input);
             this.logEvent(runLogPath, makeEvent(this.config.runId, "tool_call_end", { tool_name: tc.name, output }));
-          } catch (err: any) {
-            error = err.message ?? String(err);
+          } catch (err: unknown) {
+            error = err instanceof Error ? err.message : String(err);
             this.logEvent(runLogPath, makeEvent(this.config.runId, "tool_call_error", { tool_name: tc.name, error }));
           }
 

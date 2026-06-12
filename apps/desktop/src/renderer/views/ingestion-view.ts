@@ -91,7 +91,7 @@ export function renderIngestion(container: HTMLElement): void {
     scanBtn.disabled = true;
     scanBtn.textContent = "Scanning...";
     try {
-      const resp = await window.carbonAPI.invoke({ type: "ingestion/scan", workspaceId } as any) as any;
+      const resp = await window.carbonAPI.invoke({ type: "ingestion/scan", workspaceId });
       results.innerHTML = "";
       if (resp.type !== "ingestion/scan.success") {
         results.innerHTML = `<p class="text-danger font-12">Error: ${resp.error}</p>`;
@@ -106,9 +106,9 @@ export function renderIngestion(container: HTMLElement): void {
 
       const list = document.createElement("div");
       list.className = "list";
-      for (const job of jobs as any[]) {
-        const fileName = job.file_name || job.original_name || `Document ${String(job.id).slice(0, 8)}`;
-        const fileType = String(job.file_type || job.format || "unknown").toUpperCase();
+      for (const job of jobs as Array<{ id: string; originalName?: string; fileType?: string; size?: number; status: string }>) {
+        const fileName = job.originalName || `Document ${String(job.id).slice(0, 8)}`;
+        const fileType = String(job.fileType || "unknown").toUpperCase();
         const fileSizeKb = Math.round((Number(job.size || 0) / 1024) * 10) / 10;
         const item = createListItem(fileName, `${fileType} · ${fileSizeKb} KB`);
         item.querySelector(".list-item-info")?.prepend(createStatusDot(job.status || "pending"));

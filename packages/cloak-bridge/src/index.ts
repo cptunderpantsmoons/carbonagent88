@@ -146,8 +146,8 @@ export async function launchLoginPortal(profileId: string, profileDir: string, s
     loginBrowsers.set(profileId, browser);
 
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message ?? String(err) };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -206,9 +206,9 @@ export async function checkSessionHealth(_profileId: string, profileDir: string,
       return { status: "expired", domain: targetDomain, httpStatus: status };
     }
     return { status: "unknown", domain: targetDomain, httpStatus: status };
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (ownBrowser && browser) await browser.close();
-    return { status: "unknown", domain: targetDomain, error: err.message ?? String(err) };
+    return { status: "unknown", domain: targetDomain, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

@@ -56,7 +56,7 @@ export class WatcherManager {
     this.intervals.set(watcherId, id);
     try {
       const db = new CarbonDatabase();
-      await db.updateWatcher({ id: watcherId, enabled: true });
+      await db.updateWatcher(watcherId, { enabled: true });
     } catch { /* ignore */ }
   }
 
@@ -98,12 +98,12 @@ export class WatcherManager {
       const db = new CarbonDatabase();
       const watcherRow = await db.getWatcher(watcherId);
       const watcherName = String(watcherRow?.name ?? watcherRow?.prompt ?? watcherId);
-      await db.updateWatcher({ id: watcherId, lastRunAt: new Date().toISOString(), lastRunStatus: "running" });
+      await db.updateWatcher(watcherId, { lastRunAt: new Date().toISOString(), lastRunStatus: "running" });
 
       // Find or use first provider
       const providers = await db.listProvidersWithKeys();
       if (providers.length === 0) {
-        await db.updateWatcher({ id: watcherId, lastRunStatus: "failed" });
+        await db.updateWatcher(watcherId, { lastRunStatus: "failed" });
         console.error("[Watcher] No providers configured for workspace", workspaceId);
         this.history.push({ watcherId, watcherName, startedAt, completedAt: new Date().toISOString(), success: false });
         this.publishHistory();
@@ -118,7 +118,7 @@ export class WatcherManager {
       const result = await runAgent({ db, workspaceId, conversationId, providerId, message: prompt, maxSteps: 30, defaultProfileId: watcherRow?.profile_id as string | undefined });
       const watcherStatus = result.runStatus === "completed" ? "success" : "failed";
 
-      await db.updateWatcher({ id: watcherId, lastRunStatus: watcherStatus });
+      await db.updateWatcher(watcherId, { lastRunStatus: watcherStatus });
       this.history.push({ watcherId, watcherName, startedAt, completedAt: new Date().toISOString(), success: watcherStatus === "success" });
       this.publishHistory();
       console.log(`[Watcher] ${watcherId} completed: ${watcherStatus}`);
@@ -126,7 +126,7 @@ export class WatcherManager {
       console.error("[Watcher] execute error", e);
       try {
         const db = new CarbonDatabase();
-        await db.updateWatcher({ id: watcherId, lastRunStatus: "failed" });
+        await db.updateWatcher(watcherId, { lastRunStatus: "failed" });
         const watcherRow = await db.getWatcher(watcherId);
         this.history.push({
           watcherId,

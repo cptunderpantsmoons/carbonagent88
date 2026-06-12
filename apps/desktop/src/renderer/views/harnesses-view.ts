@@ -64,9 +64,9 @@ function escapeHtml(text: string): string {
 }
 
 async function loadHarnessConfigs(workspaceId: string): Promise<HarnessConfig[]> {
-  const resp = await window.carbonAPI.invoke({ type: "harness-configs/list", workspaceId } as any);
-  if (resp && typeof resp === "object" && (resp as any).type === "harness-configs/list.success") {
-    return ((resp as any).data as HarnessConfig[]) ?? [];
+  const resp = await window.carbonAPI.invoke({ type: "harness-configs/list", workspaceId });
+  if (resp && resp.type === "harness-configs/list.success") {
+    return (resp.data as unknown as HarnessConfig[]) ?? [];
   }
   return [];
 }
@@ -83,7 +83,7 @@ async function saveHarnessConfig(config: HarnessConfig): Promise<void> {
       qualityGates: config.qualityGates,
       extraJson: config.extraJson,
     },
-  } as any);
+  });
 }
 
 export async function renderHarnesses(container: HTMLElement): Promise<void> {

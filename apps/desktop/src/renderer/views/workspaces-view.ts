@@ -83,7 +83,7 @@ export function renderWorkspaces(container: HTMLElement): void {
       const resp = await window.carbonAPI.invoke({
         type: "workspace/create",
         data: { name, description: descInput.value.trim() || undefined, vaultDir: `/workspace/${Date.now()}` },
-      } as any) as any;
+      });
       if (resp.type === "error") Toast.show(String(resp.error), "error");
       else {
         Toast.show("Workspace created", "success");

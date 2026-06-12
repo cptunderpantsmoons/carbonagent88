@@ -1,0 +1,28 @@
+[code-review]
+default_engine = "claude"
+
+# Review categories to always check
+categories = [
+  "security",
+  "performance",
+  "architecture",
+  "code-quality",
+  "best-practices",
+  "testing",
+  "documentation",
+  "adr-compliance"
+]
+
+# Severity thresholds
+block_on = ["critical", "high"]
+warn_on = ["medium"]
+
+# Files to ignore in review
+ignore_patterns = [
+  "*.test.ts",
+  "*.spec.ts",
+  "*.d.ts",
+  "dist/**",
+  "node_modules/**",
+  "*.config.*"
+]

@@ -1,5 +1,8 @@
 /**
  * Database Context — Shared DB initialization and LLM caller builder
+ *
+ * Credentials are encrypted at rest using AES-256-GCM with a
+ * machine-derived key (hostname + username + salt).
  */
 
 import crypto from "node:crypto";
@@ -10,6 +13,8 @@ import {
   initDatabase,
 } from "@carbon-agent/local-store";
 import { createProvider } from "@carbon-agent/core-runtime";
+import { loadEnv as _loadEnv, buildConfig as _buildConfig, validateConfig } from "./env.js";
+
 // Note: LLMCaller type is not exported from @carbon-agent/ingestion
 type LLMCaller = (prompt: string) => Promise<string>;
 
@@ -27,18 +32,78 @@ export async function ensureDb(): Promise<CarbonDatabase> {
   return db;
 }
 
+function getEnvApiKeys(): { openai?: string; anthropic?: string; customBaseUrl?: string; customKey?: string; customModel?: string } {
+  const env = _loadEnv();
+  const cfg = _buildConfig(env);
+  const validation = validateConfig(cfg);
+  if (!validation.valid) {
+    console.warn("[Carbon Agent] Environment configuration issues:");
+    for (const k of validation.missing) {
+      console.warn(`  Missing: ${k}`);
+    }
+    for (const { key, reason } of validation.invalid) {
+      console.warn(`  Invalid: ${key} — ${reason}`);
+    }
+  }
+  return {
+    openai: cfg.openaiApiKey,
+    anthropic: cfg.anthropicApiKey,
+    customBaseUrl: cfg.customOpenAiBaseUrl,
+    customKey: cfg.customOpenAiApiKey,
+    customModel: cfg.customOpenAiModel,
+  };
+}
+
 async function seedDefaultProviders(d: CarbonDatabase): Promise<void> {
   const existing = await d.listProviders();
   if (existing.length > 0) return;
 
-  await d.createProvider({
-    id: crypto.randomUUID(),
-    type: "custom-openai",
-    name: "Umans AI",
-    apiKey: "sk-HPfucc2JwcHPdWHh0F_S8VE_BP8lHb8rCiooKO_pZmA",
-    baseUrl: "https://api.code.umans.ai/v1",
-    model: "umans-kimi-k2.6",
-  });
+  const keys = getEnvApiKeys();
+  const providers: Array<{
+    id: string;
+    type: "openai" | "anthropic" | "custom-openai";
+    name: string;
+    apiKey: string;
+    baseUrl?: string;
+    model: string;
+  }> = [];
+
+  if (keys.customKey && keys.customBaseUrl && keys.customModel) {
+    providers.push({
+      id: crypto.randomUUID(),
+      type: "custom-openai",
+      name: "Custom Provider",
+      apiKey: keys.customKey,
+      baseUrl: keys.customBaseUrl,
+      model: keys.customModel,
+    });
+  }
+  if (keys.openai) {
+    providers.push({
+      id: crypto.randomUUID(),
+      type: "openai",
+      name: "OpenAI",
+      apiKey: keys.openai,
+      model: "gpt-4o",
+    });
+  }
+  if (keys.anthropic) {
+    providers.push({
+      id: crypto.randomUUID(),
+      type: "anthropic",
+      name: "Anthropic (Claude)",
+      apiKey: keys.anthropic,
+      model: "claude-sonnet-4-20250514",
+    });
+  }
+
+  for (const p of providers) {
+    try {
+      await d.createProvider(p);
+    } catch (err) {
+      console.warn("Failed to seed provider:", p.name, err);
+    }
+  }
 }
 
 async function seedDefaultProfiles(d: CarbonDatabase): Promise<void> {

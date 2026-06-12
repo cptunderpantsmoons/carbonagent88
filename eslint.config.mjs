@@ -1,6 +1,7 @@
 import { defineConfig } from "eslint/config";
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import globals from "globals";
 
 export default defineConfig([
   js.configs.recommended,
@@ -12,6 +13,9 @@ export default defineConfig([
       parserOptions: {
         project: true,
       },
+      globals: {
+        ...globals.node,
+      },
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
@@ -20,6 +24,14 @@ export default defineConfig([
       "@typescript-eslint/no-empty-object-type": "off",
       "no-console": "off",
       "no-useless-escape": "off",
+    },
+  },
+  {
+    files: ["**/*.mjs", "scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
     },
   },
   {

@@ -125,7 +125,7 @@ export async function spawnCliSubAgent(opts: CliSubAgentOptions): Promise<CliSub
       stderr += chunk.toString();
     });
 
-    child.on("error", (err: Error) => {
+    (child as unknown as NodeJS.EventEmitter).on("error", (err: Error) => {
       const isNotFound = err.message.includes("ENOENT") || err.message.includes("not found");
       resolve({
         success: false,
@@ -139,7 +139,7 @@ export async function spawnCliSubAgent(opts: CliSubAgentOptions): Promise<CliSub
       });
     });
 
-    child.on("close", (code) => {
+    (child as unknown as NodeJS.EventEmitter).on("close", (code: number | null) => {
       const result = stdout.trim();
 
       logEvent(opts.logPath, {
@@ -212,7 +212,7 @@ export function detectCli(cli: CliType): Promise<CliDetectionResult> {
       stdout += chunk.toString();
     });
 
-    child.on("error", () => {
+    (child as unknown as NodeJS.EventEmitter).on("error", () => {
       resolve({
         cli,
         installed: false,
@@ -220,7 +220,7 @@ export function detectCli(cli: CliType): Promise<CliDetectionResult> {
       });
     });
 
-    child.on("close", (code) => {
+    (child as unknown as NodeJS.EventEmitter).on("close", (code: number | null) => {
       if (code === 0) {
         resolve({
           cli,

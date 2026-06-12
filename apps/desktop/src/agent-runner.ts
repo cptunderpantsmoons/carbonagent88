@@ -401,12 +401,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Load harness configs to get enabled harnesses, task templates, and quality gates
     const harnessConfigRows = await db.listHarnessConfigs(workspaceId);
     const enabledHarnessIds = new Set(
-      harnessConfigRows.filter((r: any) => Number(r.enabled) !== 0).map((r: any) => String(r.harness_id))
+      harnessConfigRows.filter((r: Record<string, unknown>) => Number(r.enabled) !== 0).map((r: Record<string, unknown>) => String(r.harness_id))
     );
     const taskTemplates: Record<string, string> = {};
     const qualityGatesSet = new Set<string>();
     for (const row of harnessConfigRows) {
-      const r = row as any;
+      const r = row as Record<string, unknown>;
       if (r.task_template) taskTemplates[String(r.harness_id)] = String(r.task_template);
       try {
         const gates = JSON.parse(String(r.quality_gates_json ?? "[]")) as string[];

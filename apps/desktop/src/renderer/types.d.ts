@@ -2,10 +2,23 @@ import type { SessionEvent } from "@carbon-agent/shared-schemas";
 
 export {};
 
+/* Structural: used by renderer views to narrow IPC responses without breaking DOM code */
+export type IpcResponse = {
+  type: string;
+  error?: string;
+  code?: string;
+  data?: unknown;
+  jobs?: unknown[];
+  events?: unknown[];
+  status?: string;
+  id?: string;
+  [key: string]: unknown;
+};
+
 declare global {
   interface Window {
     carbonAPI: {
-      invoke(request: Record<string, unknown>): Promise<unknown>;
+      invoke(request: Record<string, unknown>): Promise<IpcResponse>;
       onViewportFrame?: (callback: (frame: { profileId: string; mimeType: string; base64: string }) => void) => () => void;
       onAgentTopology?: (callback: (data: { runId: string; nodes: Array<{ id: string; label: string; status: string; x: number; y: number }>; edges: Array<{ from: string; to: string }> }) => void) => () => void;
       onAXTree?: (callback: (data: { profileId: string; tree: { role: string; name?: string; value?: string; axNodeId: string; children?: unknown[] }; activeNodeId?: string }) => void) => () => void;

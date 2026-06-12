@@ -131,7 +131,7 @@ async function renderSkillCards(list: HTMLElement, workspaceId?: string): Promis
       return;
     }
 
-    for (const skill of skills as any[]) {
+    for (const skill of skills as Array<Record<string, unknown>>) {
       const totalRuns = Number(skill.successCount || 0) + Number(skill.failureCount || 0);
       const successRate = totalRuns > 0 ? Math.round((Number(skill.successCount || 0) / totalRuns) * 100) : 0;
       const rateClass = successRate >= 80 ? "success" : successRate >= 50 ? "warning" : "danger";

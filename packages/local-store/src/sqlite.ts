@@ -1,6 +1,5 @@
 import initSqlJs from "sql.js";
 import type { Database, SqlJsStatic } from "sql.js";
-import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -13,11 +12,12 @@ const __dirname = path.dirname(__filename);
 
 function resolveWasmDir(): string {
   try {
+    // Create a require function to resolve sql.js WASM path
     const require = createRequire(import.meta.url);
     const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
     return path.dirname(wasmPath);
   } catch {
-    // Fallback for when sql.js is not resolvable via node_modules
+    // Fallback
     return path.join(__dirname, "..", "node_modules", "sql.js", "dist");
   }
 }
@@ -26,7 +26,7 @@ const wasmDir = resolveWasmDir();
 
 /**
  * SQLite Database Adapter (sql.js)
- * 
+ *
  * Pure JS SQLite — no native deps. Async init, sync operations.
  * Load DB at startup, save on shutdown.
  */
@@ -38,7 +38,7 @@ let currentDbPath = getDatabasePath();
 async function initEngine(): Promise<SqlJsStatic> {
   if (sqlJs) return sqlJs;
   sqlJs = await initSqlJs({
-        locateFile: (file: string): string => path.join(wasmDir, file),
+    locateFile: (file: string): string => path.join(wasmDir, file),
   });
   return sqlJs;
 }
@@ -72,22 +72,19 @@ export async function ensureDb(): Promise<Database> {
   return dbInstance;
 }
 
-export async function initDatabase(path?: string): Promise<void> {
-  if (path) currentDbPath = path;
-  await initEngine();
-  dbInstance = loadOrCreateDb();
-  initTables();
+export function flushDb(): void {
+  if (dbInstance) {
+    saveDb(dbInstance);
+  }
 }
 
-export function saveDatabase(): void {
-  if (dbInstance) saveDb(dbInstance);
-}
-
-export function closeDatabase(): void {
+export function closeDb(): void {
+  flushDb();
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
   }
+  sqlJs = null;
 }
 
 function initTables(): void {
@@ -162,6 +159,15 @@ function initTables(): void {
       provenance_score REAL NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS browser_sessions (
+      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES browser_profiles(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle','running','completed','failed','cancelled')),
+      headless INTEGER NOT NULL DEFAULT 1,
+      cdp_port INTEGER,
+      target_url TEXT,
+      cookies_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS data_sources (
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       type TEXT NOT NULL CHECK(type IN ('file','browser_download','web_scrape')),
@@ -227,7 +233,7 @@ function initTables(): void {
 function ensureBrowserProfileColumns(): void {
   if (!dbInstance) return;
   const columns = getRows(dbInstance, "PRAGMA table_info(browser_profiles)");
-  const names = new Set(columns.map((column) => String(column.name)));
+  const names = new Set(columns.map((column: RowObj) => String(column.name)));
   if (!names.has("cdp_url")) {
     dbInstance.exec("ALTER TABLE browser_profiles ADD COLUMN cdp_url TEXT");
   }
@@ -239,7 +245,7 @@ function ensureBrowserProfileColumns(): void {
 function ensureWatcherColumns(): void {
   if (!dbInstance) return;
   const columns = getRows(dbInstance, "PRAGMA table_info(watchers)");
-  const names = new Set(columns.map((column) => String(column.name)));
+  const names = new Set(columns.map((column: RowObj) => String(column.name)));
   if (!names.has("name")) {
     dbInstance.exec("ALTER TABLE watchers ADD COLUMN name TEXT NOT NULL DEFAULT ''");
   }
@@ -248,52 +254,72 @@ function ensureWatcherColumns(): void {
   }
 }
 
-// --- helpers ---
-interface RowObj {
-  [key: string]: unknown;
+/** Initialize database engine, load/create file, and create tables. Accepts optional path override for testing. */
+export async function initDatabase(filePath?: string): Promise<void> {
+  if (filePath) currentDbPath = filePath;
+  await initEngine();
+  dbInstance = loadOrCreateDb();
+  initTables();
 }
 
-function inferDocumentFormat(filePath: string, mimeType?: string | null): "markdown" | "docx" | "pdf" | "unknown" {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".md" || ext === ".markdown") return "markdown";
-  if (ext === ".docx") return "docx";
-  if (ext === ".pdf") return "pdf";
-  if (mimeType === "text/markdown" || mimeType === "text/plain") return "markdown";
-  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
-  if (mimeType === "application/pdf") return "pdf";
-  return "unknown";
+/** Save current in-memory database to disk (flush). */
+export function saveDatabase(): void {
+  flushDb();
 }
 
-function buildPreview(content: string): string {
-  return content.replace(/\s+/g, " ").trim().slice(0, 160);
+/** Alias for closeDb — legacy export compatibility. */
+export { closeDb as closeDatabase };
+
+interface RowObj { [key: string]: unknown; }
+
+function bindParams(params?: unknown[]): Array<string | number | Uint8Array | null> {
+  if (!params) return [];
+  // sql.js allows SqlValue[] 
+  return params as Array<string | number | Uint8Array | null>;
 }
 
-export function getRow(db: Database, sql: string, params: unknown[] = []): RowObj | undefined {
+export function getRow(
+  db: Database,
+  sql: string,
+  params?: unknown[],
+): RowObj | undefined {
   const stmt = db.prepare(sql);
-  stmt.bind(params as any);
+  stmt.bind(bindParams(params));
   if (stmt.step()) {
     const row = stmt.getAsObject();
     stmt.free();
-    return row;
+    return row as RowObj;
   }
   stmt.free();
   return undefined;
 }
 
-export function getRows(db: Database, sql: string, params: unknown[] = []): RowObj[] {
+export function getRows(
+  db: Database,
+  sql: string,
+  params?: unknown[],
+): RowObj[] {
   const stmt = db.prepare(sql);
-  stmt.bind(params as any);
+  stmt.bind(bindParams(params));
   const rows: RowObj[] = [];
-  while (stmt.step()) rows.push(stmt.getAsObject());
+  while (stmt.step()) rows.push(stmt.getAsObject() as RowObj);
   stmt.free();
   return rows;
 }
 
-export function runStmt(db: Database, sql: string, params: unknown[] = []): void {
+export function runStmt(
+  db: Database,
+  sql: string,
+  params?: unknown[],
+): void {
   const stmt = db.prepare(sql);
-  stmt.bind(params as any);
+  stmt.bind(bindParams(params));
   stmt.step();
   stmt.free();
+}
+
+function coerce<T>(value: unknown): T {
+  return value as T;
 }
 
 // --- public API ---
@@ -310,77 +336,121 @@ export class CarbonDatabase {
 
   async createWorkspace(p: { id: string; name: string; description?: string; vaultDir: string }) {
     const db = await ensureDb();
-    runStmt(db, "INSERT INTO workspaces (id, name, description, vault_dir) VALUES (?, ?, ?, ?)",
-      [p.id, p.name, p.description ?? null, p.vaultDir]);
-    const defaultHarnesses = [
-      { id: crypto.randomUUID(), harnessId: "browser",      taskTemplate: "Collect evidence from authenticated browser portals. Use stealth_open, stealth_scrape, and stealth_download tools. Focus on financial records, invoices, and compliance documents." },
-      { id: crypto.randomUUID(), harnessId: "claude-code", taskTemplate: "Refactor, edit, and generate code across the workspace. Use terminal and file editing tools. Ensure tests pass and code style is consistent." },
-      { id: crypto.randomUUID(), harnessId: "codex",       taskTemplate: "Generate new modules and analyze code autonomously. Sandboxed to the workspace. Multi-file changes with analysis notes." },
-      { id: crypto.randomUUID(), harnessId: "local",       taskTemplate: "Research topics, extract structured data from text, and draft documents. Use reasoning and synthesis capabilities." },
-    ];
-    for (const h of defaultHarnesses) {
-      runStmt(db,
-        `INSERT INTO harness_configs (id, workspace_id, harness_id, enabled, task_template, quality_gates_json, extra_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [h.id, p.id, h.harnessId, 1, h.taskTemplate, "[]", "{}"]);
-    }
+    runStmt(
+      db,
+      "INSERT INTO workspaces (id, name, description, vault_dir, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.name, p.description ?? null, p.vaultDir],
+    );
+    return p.id;
   }
 
-  async getProvider(id: string) {
+  async updateWorkspace(
+    id: string,
+    p: { name?: string; description?: string },
+  ) {
     const db = await ensureDb();
-    return getRow(db, "SELECT id, type, name, base_url, model, created_at, updated_at FROM ai_providers WHERE id = ?", [id]);
+    const fields: string[] = ["updated_at = datetime('now')"];
+    const vals: unknown[] = [];
+    if (p.name !== undefined) {
+      fields.push("name = ?");
+      vals.push(p.name);
+    }
+    if (p.description !== undefined) {
+      fields.push("description = ?");
+      vals.push(p.description);
+    }
+    vals.push(id);
+    runStmt(db, `UPDATE workspaces SET ${fields.join(", ")} WHERE id = ?`, vals);
   }
 
-  async getProviderWithKey(id: string) {
+  async deleteWorkspace(id: string) {
     const db = await ensureDb();
-    const row = getRow(db, "SELECT id, type, name, api_key, base_url, model, created_at, updated_at FROM ai_providers WHERE id = ?", [id]);
-    if (row && row.api_key) {
-      try {
-        row.api_key = decrypt(row.api_key as string);
-      } catch {
-        // If decryption fails, assume it was stored plaintext (migration)
-      }
-    }
-    return row;
+    runStmt(db, "DELETE FROM workspaces WHERE id = ?", [id]);
   }
 
   async listProviders() {
     const db = await ensureDb();
-    return getRows(db, "SELECT id, type, name, base_url, model, created_at, updated_at FROM ai_providers ORDER BY created_at DESC");
+    return getRows(db, "SELECT * FROM ai_providers ORDER BY created_at DESC");
   }
 
   async listProvidersWithKeys() {
     const db = await ensureDb();
-    const rows = getRows(db, "SELECT id, type, name, api_key, base_url, model, created_at, updated_at FROM ai_providers ORDER BY created_at DESC");
+    const rows = getRows(
+      db,
+      "SELECT id, type, name, api_key, base_url, model, created_at, updated_at FROM ai_providers ORDER BY created_at DESC",
+    );
     for (const row of rows) {
       if (row.api_key) {
         try {
           row.api_key = decrypt(row.api_key as string);
         } catch {
-          // Plaintext fallback
+          /* leave encrypted */
         }
       }
     }
     return rows;
   }
 
-  async createProvider(p: { id: string; type: string; name: string; apiKey: string; baseUrl?: string; model: string }) {
+  async getProvider(id: string) {
     const db = await ensureDb();
-    const encryptedKey = encrypt(p.apiKey);
-    runStmt(db, "INSERT INTO ai_providers (id, type, name, api_key, base_url, model) VALUES (?, ?, ?, ?, ?, ?)",
-      [p.id, p.type, p.name, encryptedKey, p.baseUrl ?? null, p.model]);
+    const row = getRow(
+      db,
+      "SELECT id, type, name, api_key, base_url, model, created_at, updated_at FROM ai_providers WHERE id = ?",
+      [id],
+    );
+    if (row && row.api_key) {
+      try {
+        row.api_key = decrypt(row.api_key as string);
+      } catch {
+        /* already plaintext */
+      }
+    }
+    return row;
   }
 
-  async updateProvider(p: { id: string; type?: string; name?: string; apiKey?: string; baseUrl?: string; model?: string }) {
+  async createProvider(p: {
+    id: string;
+    type: string;
+    name: string;
+    apiKey: string;
+    baseUrl?: string;
+    model: string;
+  }) {
+    const db = await ensureDb();
+    const encryptedKey = encrypt(p.apiKey);
+    runStmt(
+      db,
+      "INSERT INTO ai_providers (id, type, name, api_key, base_url, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.type, p.name, encryptedKey, p.baseUrl ?? null, p.model],
+    );
+    return p.id;
+  }
+
+  async updateProvider(id: string, p: { type?: "anthropic" | "openai" | "custom-openai"; name?: string; apiKey?: string; baseUrl?: string; model?: string }) {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    if (p.type !== undefined) { fields.push("type = ?"); vals.push(p.type); }
-    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
-    if (p.baseUrl !== undefined) { fields.push("base_url = ?"); vals.push(p.baseUrl); }
-    if (p.model !== undefined) { fields.push("model = ?"); vals.push(p.model); }
-    if (p.apiKey !== undefined) { fields.push("api_key = ?"); vals.push(encrypt(p.apiKey)); }
-    vals.push(p.id);
+    if (p.type !== undefined) {
+      fields.push("type = ?");
+      vals.push(p.type);
+    }
+    if (p.name !== undefined) {
+      fields.push("name = ?");
+      vals.push(p.name);
+    }
+    if (p.apiKey !== undefined) {
+      fields.push("api_key = ?");
+      vals.push(encrypt(p.apiKey));
+    }
+    if (p.baseUrl !== undefined) {
+      fields.push("base_url = ?");
+      vals.push(p.baseUrl);
+    }
+    if (p.model !== undefined) {
+      fields.push("model = ?");
+      vals.push(p.model);
+    }
+    vals.push(id);
     runStmt(db, `UPDATE ai_providers SET ${fields.join(", ")} WHERE id = ?`, vals);
   }
 
@@ -399,25 +469,82 @@ export class CarbonDatabase {
     return getRows(db, "SELECT * FROM browser_profiles ORDER BY created_at DESC");
   }
 
-  async createProfile(p: { id: string; name: string; description?: string; profileDir?: string; cdpUrl?: string; cdpFingerprint?: string; targetDomains: string[] }) {
+  async createProfile(p: {
+    id: string;
+    name: string;
+    description?: string;
+    profileDir: string;
+    cdpUrl?: string;
+    cdpFingerprint?: string;
+    targetDomains: string[];
+  }) {
     const db = await ensureDb();
-    runStmt(db, "INSERT INTO browser_profiles (id, name, description, profile_dir, cdp_url, cdp_fingerprint, target_domains) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [p.id, p.name, p.description ?? null, p.profileDir ?? null, p.cdpUrl ?? null, p.cdpFingerprint ?? null, JSON.stringify(p.targetDomains)]);
+    runStmt(
+      db,
+      "INSERT INTO browser_profiles (id, name, description, profile_dir, cdp_url, cdp_fingerprint, target_domains, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [
+        p.id,
+        p.name,
+        p.description ?? null,
+        p.profileDir,
+        p.cdpUrl ?? null,
+        p.cdpFingerprint ?? null,
+        JSON.stringify(p.targetDomains),
+        "unknown",
+      ],
+    );
+    return p.id;
   }
 
-  async updateProfile(p: { id: string; name?: string; description?: string; profileDir?: string; cdpUrl?: string; cdpFingerprint?: string; targetDomains?: string[]; status?: string; lastCheckedAt?: string }) {
+  async updateProfile(
+    id: string,
+    p: {
+      name?: string;
+      description?: string;
+      profileDir?: string;
+      targetDomains?: string[];
+      status?: string;
+      lastCheckedAt?: string | null;
+      cdpUrl?: string | null;
+      cdpFingerprint?: string | null;
+    },
+  ) {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
-    if (p.description !== undefined) { fields.push("description = ?"); vals.push(p.description); }
-    if (p.profileDir !== undefined) { fields.push("profile_dir = ?"); vals.push(p.profileDir); }
-    if (p.cdpUrl !== undefined) { fields.push("cdp_url = ?"); vals.push(p.cdpUrl); }
-    if (p.cdpFingerprint !== undefined) { fields.push("cdp_fingerprint = ?"); vals.push(p.cdpFingerprint); }
-    if (p.status !== undefined) { fields.push("status = ?"); vals.push(p.status); }
-    if (p.lastCheckedAt !== undefined) { fields.push("last_checked_at = ?"); vals.push(p.lastCheckedAt); }
-    if (p.targetDomains !== undefined) { fields.push("target_domains = ?"); vals.push(JSON.stringify(p.targetDomains)); }
-    vals.push(p.id);
+    if (p.name !== undefined) {
+      fields.push("name = ?");
+      vals.push(p.name);
+    }
+    if (p.description !== undefined) {
+      fields.push("description = ?");
+      vals.push(p.description);
+    }
+    if (p.profileDir !== undefined) {
+      fields.push("profile_dir = ?");
+      vals.push(p.profileDir);
+    }
+    if (p.targetDomains !== undefined) {
+      fields.push("target_domains = ?");
+      vals.push(JSON.stringify(p.targetDomains));
+    }
+    if (p.status !== undefined) {
+      fields.push("status = ?");
+      vals.push(p.status);
+    }
+    if (p.lastCheckedAt !== undefined) {
+      fields.push("last_checked_at = ?");
+      vals.push(p.lastCheckedAt);
+    }
+    if (p.cdpUrl !== undefined) {
+      fields.push("cdp_url = ?");
+      vals.push(p.cdpUrl);
+    }
+    if (p.cdpFingerprint !== undefined) {
+      fields.push("cdp_fingerprint = ?");
+      vals.push(p.cdpFingerprint);
+    }
+    vals.push(id);
     runStmt(db, `UPDATE browser_profiles SET ${fields.join(", ")} WHERE id = ?`, vals);
   }
 
@@ -426,328 +553,251 @@ export class CarbonDatabase {
     runStmt(db, "DELETE FROM browser_profiles WHERE id = ?", [id]);
   }
 
-  async getConversation(id: string) {
+  async listSessions() {
     const db = await ensureDb();
-    return getRow(db, `SELECT c.*, json_group_array(json_object('id',m.id,'role',m.role,'content',m.content,'created_at',m.created_at)) as messages
-      FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id WHERE c.id = ? GROUP BY c.id`, [id]);
+    return getRows(db, "SELECT * FROM browser_sessions ORDER BY created_at DESC");
   }
 
-  async listConversations(workspaceId: string) {
-    const db = await ensureDb();
-    return getRows(db, "SELECT * FROM conversations WHERE workspace_id = ? ORDER BY updated_at DESC", [workspaceId]);
-  }
-
-  async createConversation(p: { id: string; workspaceId: string }) {
-    const db = await ensureDb();
-    runStmt(db, "INSERT INTO conversations (id, workspace_id) VALUES (?, ?)", [p.id, p.workspaceId]);
-  }
-
-  async deleteConversation(id: string) {
-    const db = await ensureDb();
-    runStmt(db, "DELETE FROM conversations WHERE id = ?", [id]);
-  }
-
-  async addMessage(p: { id: string; conversationId: string; role: string; content: string }) {
-    const db = await ensureDb();
-    runStmt(db, "INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)",
-      [p.id, p.conversationId, p.role, p.content]);
-  }
-
-  async updateConversationTitle(id: string, title: string) {
-    const db = await ensureDb();
-    runStmt(db, "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?", [title, id]);
-  }
-
-  async getRun(id: string) {
-    const db = await ensureDb();
-    return getRow(db, "SELECT * FROM runs WHERE id = ?", [id]);
-  }
-
-  async listRuns(conversationId: string) {
-    const db = await ensureDb();
-    return getRows(db, "SELECT * FROM runs WHERE conversation_id = ? ORDER BY created_at DESC", [conversationId]);
-  }
-
-  async countRunningRuns() {
-    const db = await ensureDb();
-    const row = getRow(db, "SELECT COUNT(*) AS count FROM runs WHERE status = 'running'");
-    return Number(row?.count ?? 0);
-  }
-
-  async createRun(p: { id: string; conversationId: string; workspaceId: string; providerId: string | null; jsonlLogPath: string }) {
-    const db = await ensureDb();
-    runStmt(db, "INSERT INTO runs (id, conversation_id, workspace_id, provider_id, jsonl_log_path, status) VALUES (?, ?, ?, ?, ?, 'idle')",
-      [p.id, p.conversationId, p.workspaceId, p.providerId, p.jsonlLogPath]);
-  }
-
-  async updateRunStatus(id: string, status: string, extra: { model?: string; startedAt?: string; completedAt?: string } = {}) {
-    const db = await ensureDb();
-    const fields: string[] = ["status = ?", "updated_at = datetime('now')"];
-    const vals: unknown[] = [status];
-    if (extra.model) { fields.push("model = ?"); vals.push(extra.model); }
-    if (extra.startedAt) { fields.push("started_at = ?"); vals.push(extra.startedAt); }
-    if (extra.completedAt) { fields.push("completed_at = ?"); vals.push(extra.completedAt); }
-    vals.push(id);
-    runStmt(db, `UPDATE runs SET ${fields.join(", ")} WHERE id = ?`, vals);
-  }
-
-  async createOrchestrationSession(p: {
+  async createSession(p: {
     id: string;
-    workspaceId: string;
-    conversationId: string;
-    runId: string;
-    rootKind: string;
-    rootJson: string;
-    supervisionMode: "watch" | "confirm";
-    status: "draft" | "running" | "waiting" | "completed" | "failed" | "cancelled";
-    currentGoal: string;
-    completionSummary?: string | null;
+    profileId: string;
+    status: string;
+    headless?: boolean;
+    cdpPort?: number;
+    targetUrl?: string;
+    cookiesJson?: string;
   }) {
     const db = await ensureDb();
-    runStmt(db,
-      `INSERT INTO orchestration_sessions
-        (id, workspace_id, conversation_id, run_id, root_kind, root_json, supervision_mode, status, current_goal, completion_summary)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, p.workspaceId, p.conversationId, p.runId, p.rootKind, p.rootJson, p.supervisionMode, p.status, p.currentGoal, p.completionSummary ?? null],
+    runStmt(
+      db,
+      "INSERT INTO browser_sessions (id, profile_id, status, headless, cdp_port, target_url, cookies_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [
+        p.id,
+        p.profileId,
+        p.status,
+        p.headless ? 1 : 0,
+        p.cdpPort ?? null,
+        p.targetUrl ?? null,
+        p.cookiesJson ?? null,
+      ],
     );
+    return p.id;
   }
 
-  async getOrchestrationSession(id: string) {
+  async updateSession(
+    id: string,
+    p: {
+      status?: string;
+      cdpPort?: number;
+      cookiesJson?: string;
+    },
+  ) {
     const db = await ensureDb();
-    return getRow(db, "SELECT * FROM orchestration_sessions WHERE id = ?", [id]);
-  }
-
-  async updateOrchestrationSessionStatus(id: string, status: string, completionSummary?: string | null) {
-    const db = await ensureDb();
-    runStmt(db,
-      `UPDATE orchestration_sessions
-       SET status = ?, completion_summary = COALESCE(?, completion_summary), updated_at = datetime('now')
-       WHERE id = ?`,
-      [status, completionSummary ?? null, id],
-    );
-  }
-
-  async appendSessionEvent(p: { id: string; sessionId: string; role: string; kind: string; summary: string; payloadJson: string }) {
-    const db = await ensureDb();
-    runStmt(db,
-      `INSERT INTO orchestration_session_events (id, session_id, role, kind, summary, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [p.id, p.sessionId, p.role, p.kind, p.summary, p.payloadJson],
-    );
-  }
-
-  async listSessionEvents(sessionId: string) {
-    const db = await ensureDb();
-    return getRows(db,
-      "SELECT * FROM orchestration_session_events WHERE session_id = ? ORDER BY created_at ASC, id ASC",
-      [sessionId],
-    );
-  }
-
-  async saveSessionWorkingSet(p: {
-    sessionId: string;
-    entitiesJson: string;
-    documentsJson: string;
-    metricsJson: string;
-    gapsJson: string;
-    provenanceScore: number;
-  }) {
-    const db = await ensureDb();
-    runStmt(db,
-      `INSERT INTO orchestration_working_sets
-        (session_id, entities_json, documents_json, metrics_json, gaps_json, provenance_score, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(session_id) DO UPDATE SET
-        entities_json = excluded.entities_json,
-        documents_json = excluded.documents_json,
-        metrics_json = excluded.metrics_json,
-        gaps_json = excluded.gaps_json,
-        provenance_score = excluded.provenance_score,
-        updated_at = datetime('now')`,
-      [p.sessionId, p.entitiesJson, p.documentsJson, p.metricsJson, p.gapsJson, p.provenanceScore],
-    );
-  }
-
-  async getSessionWorkingSet(sessionId: string) {
-    const db = await ensureDb();
-    return getRow(db, "SELECT * FROM orchestration_working_sets WHERE session_id = ?", [sessionId]);
-  }
-
-  async addToolCall(p: { id: string; runId: string; toolName: string; input: string; output?: string; error?: string }) {
-    const db = await ensureDb();
-    runStmt(db, `INSERT INTO tool_calls (id, run_id, tool_name, input, output, error, started_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-      [p.id, p.runId, p.toolName, p.input, p.output ?? null, p.error ?? null]);
-  }
-
-  async completeToolCall(id: string, output?: string, error?: string) {
-    const db = await ensureDb();
-    if (output !== undefined || error !== undefined) {
-      const fields: string[] = ["completed_at = datetime('now')"];
-      const vals: unknown[] = [];
-      if (output !== undefined) { fields.push("output = ?"); vals.push(output); }
-      if (error !== undefined) { fields.push("error = ?"); vals.push(error); }
-      vals.push(id);
-      runStmt(db, `UPDATE tool_calls SET ${fields.join(", ")} WHERE id = ?`, vals);
-    } else {
-      runStmt(db, "UPDATE tool_calls SET completed_at = datetime('now') WHERE id = ?", [id]);
+    const fields: string[] = ["updated_at = datetime('now')"];
+    const vals: unknown[] = [];
+    if (p.status !== undefined) {
+      fields.push("status = ?");
+      vals.push(p.status);
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // DataSource & Document (ingestion pipeline)
-  // ---------------------------------------------------------------------------
-
-  async createDataSource(p: {
-    id: string;
-    workspaceId: string;
-    type: "file" | "browser_download" | "web_scrape";
-    name: string;
-    path: string;
-    mimeType?: string;
-    sizeBytes?: number;
-    sourceUrl?: string;
-    profileId?: string;
-  }) {
-    const db = await ensureDb();
-    runStmt(db,
-      `INSERT INTO data_sources (id, workspace_id, type, name, path, mime_type, size_bytes, source_url, profile_id, ingested_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-      [p.id, p.workspaceId, p.type, p.name, p.path, p.mimeType ?? null, p.sizeBytes ?? null, p.sourceUrl ?? null, p.profileId ?? null]
-    );
-  }
-
-  async createDocument(p: {
-    id: string;
-    workspaceId: string;
-    dataSourceId: string;
-    title: string;
-    content: string;
-  }) {
-    const db = await ensureDb();
-    runStmt(db,
-      `INSERT INTO documents (id, workspace_id, data_source_id, title, content, chunk_count)
-       VALUES (?, ?, ?, ?, ?, 0)`,
-      [p.id, p.workspaceId, p.dataSourceId, p.title, p.content]
-    );
-  }
-
-  async listDocuments(workspaceId: string) {
-    const db = await ensureDb();
-    const rows = getRows(db,
-      `SELECT
-         d.id,
-         d.workspace_id,
-         d.data_source_id,
-         d.title,
-         d.content,
-         d.chunk_count,
-         d.created_at,
-         d.updated_at,
-         ds.path AS file_path,
-         ds.mime_type,
-         ds.size_bytes,
-         ds.source_url,
-         ds.profile_id
-       FROM documents d
-       JOIN data_sources ds ON ds.id = d.data_source_id
-       WHERE d.workspace_id = ?
-       ORDER BY d.created_at DESC`,
-      [workspaceId]
-    );
-
-    return rows.map((row) => {
-      const filePath = String(row.file_path ?? "");
-      const mimeType = row.mime_type ? String(row.mime_type) : null;
-      const content = String(row.content ?? "");
-      return {
-        ...row,
-        format: inferDocumentFormat(filePath, mimeType),
-        preview: buildPreview(content),
-      };
-    });
-  }
-
-  async updateDocumentChunkCount(documentId: string, chunkCount: number) {
-    const db = await ensureDb();
-    runStmt(db,
-      `UPDATE documents SET chunk_count = ?, updated_at = datetime('now') WHERE id = ?`,
-      [chunkCount, documentId]
-    );
-  }
-
-  async createIngestionJob(p: { id: string; documentId: string }) {
-    const db = await ensureDb();
-    runStmt(db,
-      `INSERT INTO ingestion_jobs (id, document_id, status, chunks_created) VALUES (?, ?, 'completed', 0)`,
-      [p.id, p.documentId]
-    );
-  }
-
-  async updateIngestionJob(id: string, p: { status: string; chunksCreated?: number; error?: string }) {
-    const db = await ensureDb();
-    const fields: string[] = ["status = ?", "updated_at = datetime('now')"];
-    const vals: unknown[] = [p.status];
-    if (p.chunksCreated !== undefined) { fields.push("chunks_created = ?"); vals.push(p.chunksCreated); }
-    if (p.error !== undefined) { fields.push("error = ?"); vals.push(p.error); }
+    if (p.cdpPort !== undefined) {
+      fields.push("cdp_port = ?");
+      vals.push(p.cdpPort);
+    }
+    if (p.cookiesJson !== undefined) {
+      fields.push("cookies_json = ?");
+      vals.push(p.cookiesJson);
+    }
     vals.push(id);
-    runStmt(db, `UPDATE ingestion_jobs SET ${fields.join(", ")} WHERE id = ?`, vals);
+    runStmt(
+      db,
+      `UPDATE browser_sessions SET ${fields.join(", ")} WHERE id = ?`,
+      vals,
+    );
   }
 
+  async deleteSession(id: string) {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM browser_sessions WHERE id = ?", [id]);
+  }
+
+  // ==================== WATCHERS ====================
+  async createWatcher(p: {
+    id: string;
+    workspaceId: string;
+    profileId?: string | null;
+    name: string;
+    cronExpression: string;
+    prompt: string;
+    enabled: boolean;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO watchers (id, workspace_id, profile_id, name, cron_expression, prompt, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.workspaceId, p.profileId ?? null, p.name, p.cronExpression, p.prompt, p.enabled ? 1 : 0],
+    );
+    return p.id;
+  }
+
+  async listWatchersForWorkspace(workspaceId: string) {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      "SELECT * FROM watchers WHERE workspace_id = ? ORDER BY created_at DESC",
+      [workspaceId],
+    );
+  }
 
   async getWatcher(id: string) {
     const db = await ensureDb();
     return getRow(db, "SELECT * FROM watchers WHERE id = ?", [id]);
   }
 
-  async listWatchers() {
-    const db = await ensureDb();
-    return getRows(db, "SELECT * FROM watchers ORDER BY created_at DESC");
-  }
-
-  async listSkills(workspaceId: string) {
-    const db = await ensureDb();
-    return getRows(db, "SELECT * FROM skills WHERE workspace_id = ? ORDER BY pinned DESC, success_count DESC, created_at DESC", [workspaceId]);
-  }
-
-  async toggleSkillPin(id: string, pinned: boolean) {
-    const db = await ensureDb();
-    runStmt(db, "UPDATE skills SET pinned = ?, updated_at = datetime('now') WHERE id = ?", [pinned ? 1 : 0, id]);
-  }
-
-  async deleteSkill(id: string) {
-    const db = await ensureDb();
-    runStmt(db, "DELETE FROM skills WHERE id = ?", [id]);
-  }
-
-  async createWatcher(p: { id: string; workspaceId: string; name: string; cronExpression: string; prompt: string; enabled: boolean; profileId?: string | null }) {
-    const db = await ensureDb();
-    runStmt(db, "INSERT INTO watchers (id, workspace_id, name, cron_expression, prompt, enabled, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [p.id, p.workspaceId, p.name, p.cronExpression, p.prompt, p.enabled ? 1 : 0, p.profileId ?? null]);
-  }
-
-  async updateWatcher(p: { id: string; name?: string; profileId?: string | null; cronExpression?: string; prompt?: string; enabled?: boolean; lastRunAt?: string; lastRunStatus?: string }) {
+  async updateWatcher(
+    id: string,
+    p: {
+      name?: string;
+      path?: string;
+      recursive?: boolean;
+      cron?: string;
+      cronExpression?: string;
+      enabled?: boolean;
+      profileId?: string | null;
+      prompt?: string;
+      lastRunAt?: string;
+      lastRunStatus?: string;
+    },
+  ) {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
-    if (p.profileId !== undefined) { fields.push("profile_id = ?"); vals.push(p.profileId); }
-    if (p.cronExpression !== undefined) { fields.push("cron_expression = ?"); vals.push(p.cronExpression); }
-    if (p.prompt !== undefined) { fields.push("prompt = ?"); vals.push(p.prompt); }
-    if (p.enabled !== undefined) { fields.push("enabled = ?"); vals.push(p.enabled ? 1 : 0); }
-    if (p.lastRunAt !== undefined) { fields.push("last_run_at = ?"); vals.push(p.lastRunAt); }
-    if (p.lastRunStatus !== undefined) { fields.push("last_run_status = ?"); vals.push(p.lastRunStatus); }
-    vals.push(p.id);
-    runStmt(db, `UPDATE watchers SET ${fields.join(", ")} WHERE id = ?`, vals);
+    if (p.path !== undefined) {
+      fields.push("path = ?");
+      vals.push(p.path);
+    }
+    if (p.recursive !== undefined) {
+      fields.push("recursive = ?");
+      vals.push(p.recursive ? 1 : 0);
+    }
+    if (p.cron !== undefined) {
+      fields.push("cron = ?");
+      vals.push(p.cron);
+    }
+    if (p.cronExpression !== undefined) {
+      fields.push("cron_expression = ?");
+      vals.push(p.cronExpression);
+    }
+    if (p.enabled !== undefined) {
+      fields.push("enabled = ?");
+      vals.push(p.enabled ? 1 : 0);
+    }
+    if (p.profileId !== undefined) {
+      fields.push("profile_id = ?");
+      vals.push(p.profileId ?? null);
+    }
+    if (p.prompt !== undefined) {
+      fields.push("prompt = ?");
+      vals.push(p.prompt);
+    }
+    if (p.lastRunAt !== undefined) {
+      fields.push("last_run = ?");
+      vals.push(p.lastRunAt);
+    }
+    if (p.lastRunStatus !== undefined) {
+      fields.push("last_run_status = ?");
+      vals.push(p.lastRunStatus);
+    }
+    if (p.name !== undefined) {
+      fields.push("name = ?");
+      vals.push(p.name);
+    }
+    vals.push(id);
+    runStmt(
+      db,
+      `UPDATE watchers SET ${fields.join(", ")} WHERE id = ?`,
+      vals,
+    );
   }
 
-  async listHarnessConfigs(workspaceId: string) {
+  async updateWatcherLastRun(id: string) {
     const db = await ensureDb();
-    return getRows(db, "SELECT * FROM harness_configs WHERE workspace_id = ? ORDER BY harness_id", [workspaceId]);
+    runStmt(
+      db,
+      "UPDATE watchers SET last_run = ?, updated_at = datetime('now') WHERE id = ?",
+      [new Date().toISOString(), id],
+    );
   }
 
-  async getHarnessConfig(workspaceId: string, harnessId: string) {
+  async deleteWatcher(id: string) {
     const db = await ensureDb();
-    return getRow(db, "SELECT * FROM harness_configs WHERE workspace_id = ? AND harness_id = ?", [workspaceId, harnessId]);
+    runStmt(db, "DELETE FROM watchers WHERE id = ?", [id]);
+  }
+
+  // ==================== AGENTS & OUTPUTS ====================
+  async createAgent(p: { id: string; configJson: string }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO agents (id, config_json, created_at) VALUES (?, ?, datetime('now'))",
+      [p.id, p.configJson],
+    );
+  }
+
+  async countRunningRuns() {
+    const db = await ensureDb();
+    const row = getRow(db, "SELECT COUNT(*) as count FROM agents", []);
+    return Number(row?.count ?? 0);
+  }
+
+  // ==================== HARNESS CONFIGS ====================
+  async listHarnessConfigs(
+    workspaceId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      workspace_id: string;
+      harness_id: string;
+      enabled: number;
+      task_template: string;
+      quality_gates_json: string;
+      extra_json: string;
+      created_at: string;
+      updated_at: string;
+    }>
+  > {
+    const db = await ensureDb();
+    const rows = getRows(
+      db,
+      "SELECT * FROM harness_configs WHERE workspace_id = ? ORDER BY harness_id",
+      [workspaceId],
+    );
+    return coerce(rows);
+  }
+
+  async getHarnessConfig(
+    workspaceId: string,
+    harnessId: string,
+  ): Promise<
+    | {
+        id: string;
+        workspace_id: string;
+        harness_id: string;
+        enabled: number;
+        task_template: string;
+        quality_gates_json: string;
+        extra_json: string;
+        created_at: string;
+        updated_at: string;
+      }
+    | undefined
+  > {
+    const db = await ensureDb();
+    const row = getRow(
+      db,
+      "SELECT * FROM harness_configs WHERE workspace_id = ? AND harness_id = ?",
+      [workspaceId, harnessId],
+    );
+    return coerce(row);
   }
 
   async upsertHarnessConfig(p: {
@@ -758,33 +808,271 @@ export class CarbonDatabase {
     taskTemplate?: string;
     qualityGatesJson?: string;
     extraJson?: string;
-  }) {
+  }): Promise<void> {
     const db = await ensureDb();
-    const existing = getRow(db, "SELECT id FROM harness_configs WHERE workspace_id = ? AND harness_id = ?", [p.workspaceId, p.harnessId]);
+    const existing = getRow(
+      db,
+      "SELECT id FROM harness_configs WHERE workspace_id = ? AND harness_id = ?",
+      [p.workspaceId, p.harnessId],
+    );
     if (existing) {
       const fields: string[] = ["updated_at = datetime('now')"];
       const vals: unknown[] = [];
-      if (p.enabled !== undefined) { fields.push("enabled = ?"); vals.push(p.enabled ? 1 : 0); }
-      if (p.taskTemplate !== undefined) { fields.push("task_template = ?"); vals.push(p.taskTemplate); }
-      if (p.qualityGatesJson !== undefined) { fields.push("quality_gates_json = ?"); vals.push(p.qualityGatesJson); }
-      if (p.extraJson !== undefined) { fields.push("extra_json = ?"); vals.push(p.extraJson); }
+      if (p.enabled !== undefined) {
+        fields.push("enabled = ?");
+        vals.push(p.enabled ? 1 : 0);
+      }
+      if (p.taskTemplate !== undefined) {
+        fields.push("task_template = ?");
+        vals.push(p.taskTemplate);
+      }
+      if (p.qualityGatesJson !== undefined) {
+        fields.push("quality_gates_json = ?");
+        vals.push(p.qualityGatesJson);
+      }
+      if (p.extraJson !== undefined) {
+        fields.push("extra_json = ?");
+        vals.push(p.extraJson);
+      }
       vals.push(existing.id as string);
-      runStmt(db, `UPDATE harness_configs SET ${fields.join(", ")} WHERE id = ?`, vals);
+      runStmt(
+        db,
+        `UPDATE harness_configs SET ${fields.join(", ")} WHERE id = ?`,
+        vals,
+      );
     } else {
-      runStmt(db,
+      runStmt(
+        db,
         `INSERT INTO harness_configs (id, workspace_id, harness_id, enabled, task_template, quality_gates_json, extra_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [p.id, p.workspaceId, p.harnessId, p.enabled !== undefined ? (p.enabled ? 1 : 0) : 1, p.taskTemplate ?? null, p.qualityGatesJson ?? "[]", p.extraJson ?? "{}"]);
+        [
+          p.id,
+          p.workspaceId,
+          p.harnessId,
+          p.enabled !== undefined ? (p.enabled ? 1 : 0) : 1,
+          p.taskTemplate ?? null,
+          p.qualityGatesJson ?? "[]",
+          p.extraJson ?? "{}",
+        ],
+      );
     }
   }
 
-  async deleteHarnessConfig(id: string) {
+  async deleteHarnessConfig(id: string): Promise<void> {
     const db = await ensureDb();
     runStmt(db, "DELETE FROM harness_configs WHERE id = ?", [id]);
   }
 
-  async deleteWatcher(id: string) {
+  // ==================== RUNS ====================
+  async getRun(id: string): Promise<Record<string, unknown> | undefined> {
     const db = await ensureDb();
-    runStmt(db, "DELETE FROM watchers WHERE id = ?", [id]);
+    return getRow(db, "SELECT * FROM runs WHERE id = ?", [id]);
+  }
+
+  // ==================== CONVERSATIONS ====================
+  async createConversation(p: { id: string; workspaceId: string; title?: string }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO conversations (id, workspace_id, title, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.workspaceId, p.title ?? "New Conversation"],
+    );
+    return p.id;
+  }
+
+  // ==================== DOCUMENTS ====================
+  async listDocuments(workspaceId: string) {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM documents WHERE workspace_id = ? ORDER BY created_at DESC", [workspaceId]);
+  }
+
+  // ==================== SKILLS ====================
+  async listSkills(workspaceId: string) {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM skills WHERE workspace_id = ? ORDER BY updated_at DESC", [workspaceId]);
+  }
+
+  async toggleSkillPin(id: string, pinned: boolean): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "UPDATE skills SET pinned = ?, updated_at = datetime('now') WHERE id = ?", [pinned ? 1 : 0, id]);
+  }
+
+  async deleteSkill(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM skills WHERE id = ?", [id]);
+  }
+
+  // ==================== WATCHERS (list all) ====================
+  async listWatchers() {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM watchers ORDER BY created_at DESC");
+  }
+
+  // ==================== RUNS ====================
+  async createRun(p: {
+    id: string;
+    conversationId: string;
+    workspaceId: string;
+    providerId?: string | null;
+    jsonlLogPath: string;
+    status?: string;
+    model?: string;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO runs (id, conversation_id, workspace_id, provider_id, jsonl_log_path, status, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.conversationId, p.workspaceId, p.providerId ?? null, p.jsonlLogPath, p.status ?? "idle", p.model ?? null],
+    );
+    return p.id;
+  }
+
+  async updateRunStatus(
+    id: string,
+    status: string,
+    meta?: { model?: string; startedAt?: string; completedAt?: string; error?: string | null },
+  ) {
+    const db = await ensureDb();
+    const fields: string[] = ["status = ?", "updated_at = datetime('now')"];
+    const vals: unknown[] = [status];
+    if (meta?.model !== undefined) {
+      fields.push("model = ?");
+      vals.push(meta.model);
+    }
+    if (meta?.startedAt !== undefined) {
+      fields.push("started_at = ?");
+      vals.push(meta.startedAt);
+    }
+    if (meta?.completedAt !== undefined) {
+      fields.push("completed_at = ?");
+      vals.push(meta.completedAt);
+    }
+    vals.push(id);
+    runStmt(db, `UPDATE runs SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async listRuns(workspaceId: string) {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM runs WHERE workspace_id = ? ORDER BY created_at DESC", [workspaceId]);
+  }
+
+  // ==================== MESSAGES ====================
+  async addMessage(p: { id: string; conversationId: string; role: string; content: string }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+      [p.id, p.conversationId, p.role, p.content],
+    );
+  }
+
+  // ==================== CONVERSATIONS ====================
+  async listConversations(workspaceId: string) {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM conversations WHERE workspace_id = ? ORDER BY created_at DESC", [workspaceId]);
+  }
+
+  async getConversation(id: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM conversations WHERE id = ?", [id]);
+  }
+
+  async deleteConversation(id: string) {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM conversations WHERE id = ?", [id]);
+  }
+
+  // ==================== DATA SOURCES ====================
+  async createDataSource(p: {
+    id: string;
+    workspaceId: string;
+    type: string;
+    name: string;
+    path: string;
+    mimeType?: string;
+    sizeBytes?: number;
+    sourceUrl?: string;
+    profileId?: string | null;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO data_sources (id, workspace_id, type, name, path, mime_type, size_bytes, source_url, profile_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+      [p.id, p.workspaceId, p.type, p.name, p.path, p.mimeType ?? null, p.sizeBytes ?? null, p.sourceUrl ?? null, p.profileId ?? null],
+    );
+    return p.id;
+  }
+
+  // ==================== DOCUMENTS ====================
+  async createDocument(p: {
+    id: string;
+    workspaceId: string;
+    dataSourceId: string;
+    title: string;
+    content: string;
+    chunkCount?: number;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO documents (id, workspace_id, data_source_id, title, content, chunk_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.workspaceId, p.dataSourceId, p.title, p.content, p.chunkCount ?? 0],
+    );
+    return p.id;
+  }
+
+  // ==================== INGESTION JOBS ====================
+  async createIngestionJob(p: {
+    id: string;
+    documentId: string;
+    status?: string;
+    chunksCreated?: number;
+    error?: string | null;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO ingestion_jobs (id, document_id, status, chunks_created, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.documentId, p.status ?? "pending", p.chunksCreated ?? 0, p.error ?? null],
+    );
+    return p.id;
+  }
+
+  async updateIngestionJob(
+    id: string,
+    p: { status?: string; chunksCreated?: number; error?: string | null },
+  ) {
+    const db = await ensureDb();
+    const fields: string[] = ["updated_at = datetime('now')"];
+    const vals: unknown[] = [];
+    if (p.status !== undefined) {
+      fields.push("status = ?");
+      vals.push(p.status);
+    }
+    if (p.chunksCreated !== undefined) {
+      fields.push("chunks_created = ?");
+      vals.push(p.chunksCreated);
+    }
+    if (p.error !== undefined) {
+      fields.push("error = ?");
+      vals.push(p.error);
+    }
+    vals.push(id);
+    runStmt(db, `UPDATE ingestion_jobs SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async updateDocumentChunkCount(id: string, chunkCount: number) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "UPDATE documents SET chunk_count = ?, updated_at = datetime('now') WHERE id = ?",
+      [chunkCount, id],
+    );
+  }
+
+  // ==================== PROVIDER HELPERS ====================
+  async getProviderWithKey(id: string) {
+    return this.getProvider(id);
   }
 }
+export { encrypt, decrypt } from "./crypto.js";

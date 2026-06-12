@@ -99,8 +99,8 @@ export class AnthropicProvider implements LLMProvider {
         messages: [{ role: "user", content: "Hi" }],
       });
       return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: err.message ?? String(err) };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 }
