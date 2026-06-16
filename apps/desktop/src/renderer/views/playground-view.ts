@@ -85,14 +85,17 @@ export function renderPlayground(container: HTMLElement): void {
   const wsSelect = document.createElement("select");
   wsSelect.className = "form-select mission-control";
   wsSelect.id = "workspace-selector";
+  wsSelect.setAttribute("aria-label", "Workspace");
   wsSelect.innerHTML = '<option value="">Workspace...</option>';
 
   const provSelect = document.createElement("select");
   provSelect.className = "form-select mission-control";
+  provSelect.setAttribute("aria-label", "AI Provider");
   provSelect.innerHTML = '<option value="">Provider...</option>';
 
   const supervisionSelect = document.createElement("select");
   supervisionSelect.className = "form-select mission-control";
+  supervisionSelect.setAttribute("aria-label", "Supervision mode");
   supervisionSelect.innerHTML = `
     <option value="watch">Watch mode</option>
     <option value="confirm">Confirm mode</option>

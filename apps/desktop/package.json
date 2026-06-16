@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "dev": "electron .",
     "test": "vitest run",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win --x64",
     "dist:win:portable": "electron-builder --win portable --x64",
@@ -25,10 +27,12 @@
     "@carbon-agent/shared-schemas": "workspace:*",
     "docx": "^9.7.1",
     "dotenv": "^16.4.7",
-    "pdf-lib": "^1.17.1",
-    "electron-updater": "^6.6.4"
+    "electron-updater": "^6.6.4",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
+    "@playwright/test": "^1.61.0",
     "@types/node": "^25.9.1",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.2",
@@ -62,11 +66,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico",
