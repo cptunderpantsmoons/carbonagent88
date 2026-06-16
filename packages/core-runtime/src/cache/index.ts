@@ -40,3 +40,10 @@ export {
   type TemplateVariable,
   type TemplateRenderOptions,
 } from "./prompt-templates.js";
+
+// Caching provider wrapper
+export {
+  CachingProvider,
+  createCachingProvider,
+  type CachingProviderOptions,
+} from "./caching-provider.js";

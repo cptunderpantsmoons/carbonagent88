@@ -13,6 +13,8 @@ import type { LLMProvider, ChatMessage, ToolDefinition } from "./gateway.js";
 import { createProvider } from "./gateway.js";
 import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
 import type { AgenticMemorySystem } from "./memory/system.js";
+import { CachingProvider } from "./cache/caching-provider.js";
+import type { ResponseCache, SemanticCache } from "./cache/index.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -202,6 +204,11 @@ export interface AgentRunConfig {
   providerOverride?: LLMProvider;
   /** Optional agentic memory system; if provided, memory tools use it. */
   memory?: AgenticMemorySystem;
+  /** Optional caches to wrap the active provider with. */
+  cache?: {
+    responseCache?: ResponseCache;
+    semanticCache?: SemanticCache;
+  };
 }
 
 export interface AgentStep {
@@ -224,7 +231,14 @@ export class AgentRuntime {
     if (!config.providerConfig && !config.providerOverride) {
       throw new Error("AgentRunConfig requires providerConfig or providerOverride");
     }
-    this.provider = config.providerOverride ?? createProvider(config.providerConfig!);
+    let provider = config.providerOverride ?? createProvider(config.providerConfig!);
+    if (config.cache && (config.cache.responseCache || config.cache.semanticCache)) {
+      provider = new CachingProvider(provider, {
+        responseCache: config.cache.responseCache,
+        semanticCache: config.cache.semanticCache,
+      });
+    }
+    this.provider = provider;
     this.config = config;
     this.executor = executor;
     this.memory = config.memory;

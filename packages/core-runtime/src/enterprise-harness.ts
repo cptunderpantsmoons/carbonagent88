@@ -18,6 +18,8 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { LLMProvider, ToolDefinition } from "./gateway.js";
 import { AgentRuntime, type ToolExecutor } from "./agent.js";
+import { CachingProvider } from "./cache/caching-provider.js";
+import type { ResponseCache, SemanticCache } from "./cache/index.js";
 import { MCPClient, MCPToolAdapter } from "./mcp-integration.js";
 import type { MCPServerConfig } from "@carbon-agent/shared-schemas";
 import type {
@@ -83,6 +85,11 @@ export interface EnterpriseHarnessConfig {
   enableCheckpoints: boolean;
   errorPolicy: ErrorRecoveryPolicy;
   workspaceContext?: WorkspaceContext;
+  /** Optional caches to wrap selected providers with. */
+  cache?: {
+    responseCache?: ResponseCache;
+    semanticCache?: SemanticCache;
+  };
 }
 
 export interface FallbackStrategy {
@@ -386,10 +393,17 @@ export class EnterpriseAgentHarness extends EventEmitter {
 
     try {
       const def = this.getAgentDefinition(task.role) ?? this.getDefaultDefinition(task.role);
-      const provider = this.getBestProvider(def.model);
+      let provider = this.getBestProvider(def.model);
 
       if (!provider) {
         throw new Error("No LLM provider available");
+      }
+
+      if (this.config.cache && (this.config.cache.responseCache || this.config.cache.semanticCache)) {
+        provider = new CachingProvider(provider, {
+          responseCache: this.config.cache.responseCache,
+          semanticCache: this.config.cache.semanticCache,
+        });
       }
 
       const tools = this.buildToolDefinitions(def.tools);
