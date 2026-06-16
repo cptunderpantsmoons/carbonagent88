@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { PermissionResolver } from "./security/tool-guard.js";
+import { permitTool } from "./security/tool-guard.js";
 
 export interface BrowserOrchestrationInput {
   sessionId: string;
@@ -102,6 +104,8 @@ export interface BrowserOrchestrationRuntimeDeps {
   validator(input: BrowserOrchestrationValidatorInput): Promise<BrowserValidationResult>;
   judge(input: BrowserOrchestrationJudgeInput): Promise<{ complete: boolean; gaps: string[]; summary: string }>;
   maxRounds?: number;
+  /** Optional permission resolver for browser tool gating. */
+  permissionResolver?: PermissionResolver;
 }
 
 export interface SessionEventLike {
@@ -113,6 +117,7 @@ export interface SessionEventLike {
     | "plan_updated"
     | "browser_action_started"
     | "browser_action_completed"
+    | "action_denied"
     | "document_discovered"
     | "document_acquired"
     | "working_set_updated"
@@ -179,9 +184,33 @@ async function collectWithBrowserTools(
   input: BrowserOrchestrationInput,
   plan: BrowserPlan,
   browserTools: BrowserOrchestrationRuntimeDeps["browserTools"],
+  deps?: { permissionResolver?: PermissionResolver; onEvent?: (event: Omit<SessionEventLike, "id" | "createdAt">) => Promise<void> | void },
 ): Promise<BrowserCollectionResult> {
   const profileId = input.profileId ?? input.workspaceId;
   const url = plan.url;
+
+  if (deps?.permissionResolver && !permitTool(["tools:browser"], deps.permissionResolver)) {
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "browser",
+        kind: "action_denied",
+        summary: "Permission denied: tools:browser",
+        payload: { plan: plan.summary, permissions: ["tools:browser"] },
+      }),
+    );
+    return {
+      summary: `${plan.summary}: browser tools denied`,
+      source: plan.source,
+      query: plan.query,
+      observations: [],
+      documents: [],
+      metrics: [],
+      entities: [],
+      gaps: ["Permission denied: tools:browser"],
+      provenanceScore: 0,
+    };
+  }
 
   await browserTools.stealth_open({ profileId, url });
   const scrapeResult = await browserTools.stealth_scrape({ profileId, url });
@@ -331,7 +360,10 @@ export class BrowserOrchestrationRuntime {
         payload: { plan: lastPlan, round },
       });
 
-      lastBrowserResult = await collectWithBrowserTools(input, lastPlan, this.deps.browserTools);
+      lastBrowserResult = await collectWithBrowserTools(input, lastPlan, this.deps.browserTools, {
+        permissionResolver: this.deps.permissionResolver,
+        onEvent: (event) => this.emit(event),
+      });
       await this.emit({
         sessionId: input.sessionId,
         role: "browser",

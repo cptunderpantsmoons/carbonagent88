@@ -118,6 +118,32 @@ describe("ipc-handlers rbac gating", () => {
     expect(response).toEqual({ type: "workspace/list.success", data: [{ id: "ws-1", name: "Only Mine", tenant_id: "t1" }] });
   });
 
+  it("denies memory, skills, and graph access when user is not a workspace member", async () => {
+    const { canAccessWorkspace } = await import("@carbon-agent/local-store");
+    vi.mocked(canAccessWorkspace).mockResolvedValue(false);
+
+    const memoryResponse = await mockState.registeredHandler?.({}, {
+      type: "memory/list",
+      authToken: "valid",
+      workspaceId: "00000000-0000-0000-0000-000000000002",
+    });
+    expect(memoryResponse).toEqual({ type: "error", error: "Forbidden", code: "FORBIDDEN" });
+
+    const skillsResponse = await mockState.registeredHandler?.({}, {
+      type: "skills/list",
+      authToken: "valid",
+      workspaceId: "00000000-0000-0000-0000-000000000002",
+    });
+    expect(skillsResponse).toEqual({ type: "error", error: "Forbidden", code: "FORBIDDEN" });
+
+    const graphResponse = await mockState.registeredHandler?.({}, {
+      type: "graph/list",
+      authToken: "valid",
+      workspaceId: "00000000-0000-0000-0000-000000000002",
+    });
+    expect(graphResponse).toEqual({ type: "error", error: "Forbidden", code: "FORBIDDEN" });
+  });
+
   it("denies inactive session", async () => {
     mockState.sessionActive = false;
     const response = await mockState.registeredHandler?.({}, { type: "provider/list", authToken: "invalid" });

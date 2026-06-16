@@ -15,6 +15,8 @@ import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
 import type { AgenticMemorySystem } from "./memory/system.js";
 import { CachingProvider } from "./cache/caching-provider.js";
 import type { ResponseCache, SemanticCache } from "./cache/index.js";
+import type { PermissionResolver } from "./security/tool-guard.js";
+import { permitTool } from "./security/tool-guard.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -209,6 +211,8 @@ export interface AgentRunConfig {
     responseCache?: ResponseCache;
     semanticCache?: SemanticCache;
   };
+  /** Optional permission resolver; if provided, tools are gated before execution. */
+  permissionResolver?: PermissionResolver;
 }
 
 export interface AgentStep {
@@ -373,7 +377,24 @@ Always cite your sources when answering from retrieved documents.`;
     yield { type: "error", error: msg };
   }
 
+  private findToolDefinition(name: string): ToolDefinition | undefined {
+    const tools = this.config.tools ?? CORE_TOOLS;
+    return tools.find((t) => t.name === name);
+  }
+
   private async executeTool(name: string, input: Record<string, unknown>): Promise<unknown> {
+    const toolDef = this.findToolDefinition(name);
+    if (toolDef?.permissions && this.config.permissionResolver) {
+      if (!permitTool(toolDef.permissions, this.config.permissionResolver)) {
+        return {
+          success: false,
+          output: null,
+          error: "Permission denied",
+          permissionDenied: true,
+        };
+      }
+    }
+
     switch (name) {
       case "stealth_open":
         return this.executor.stealth_open(input as { profileId: string; url: string });

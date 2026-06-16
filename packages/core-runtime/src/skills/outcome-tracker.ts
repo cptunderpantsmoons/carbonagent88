@@ -84,27 +84,34 @@ export class OutcomeTracker extends EventEmitter {
   }
 
   /**
-   * Get all outcomes for a skill.
+   * Get all outcomes for a skill, optionally filtered by workspace.
    */
-  getOutcomes(skillId: string, limit?: number): SkillOutcome[] {
+  getOutcomes(skillId: string, workspaceId?: string, limit?: number): SkillOutcome[] {
     const outcomes = this.outcomes.get(skillId) ?? [];
-    const sorted = [...outcomes].sort((a, b) =>
+    let filtered = [...outcomes].sort((a, b) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
-    return limit ? sorted.slice(0, limit) : sorted;
+    if (workspaceId) {
+      filtered = filtered.filter(o => o.workspaceId === workspaceId);
+    }
+    return limit ? filtered.slice(0, limit) : filtered;
   }
 
   /**
-   * Get outcomes for a variant.
+   * Get outcomes for a variant, optionally filtered by workspace.
    */
-  getVariantOutcomes(variantId: string): SkillOutcome[] {
+  getVariantOutcomes(variantId: string, workspaceId?: string): SkillOutcome[] {
     const allOutcomes: SkillOutcome[] = [];
     for (const outcomes of this.outcomes.values()) {
       allOutcomes.push(...outcomes.filter(o => o.variantId === variantId));
     }
-    return allOutcomes.sort((a, b) =>
+    let filtered = allOutcomes.sort((a, b) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
+    if (workspaceId) {
+      filtered = filtered.filter(o => o.workspaceId === workspaceId);
+    }
+    return filtered;
   }
 
   // ---------------------------------------------------------------------------

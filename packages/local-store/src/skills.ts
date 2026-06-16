@@ -99,8 +99,19 @@ export async function dbDeleteSkill(id: string): Promise<void> {
   runStmt(db, `DELETE FROM skills WHERE id = ?`, [id]);
 }
 
-export async function dbListSkills(workspaceId: string): Promise<DbSkill[]> {
+export async function dbListSkills(workspaceId: string, tenantId?: string): Promise<DbSkill[]> {
   const db = await ensureDb();
+  if (tenantId) {
+    const rows = getRows(
+      db,
+      `SELECT s.* FROM skills s
+       JOIN workspaces w ON s.workspace_id = w.id
+       WHERE s.workspace_id = ? AND w.tenant_id = ?
+       ORDER BY s.pinned DESC, s.success_count DESC, s.created_at DESC`,
+      [workspaceId, tenantId],
+    );
+    return rows as unknown as DbSkill[];
+  }
   const rows = getRows(db, `SELECT * FROM skills WHERE workspace_id = ? ORDER BY pinned DESC, success_count DESC, created_at DESC`, [workspaceId]);
   return rows as unknown as DbSkill[];
 }
@@ -176,8 +187,8 @@ export interface SkillExport {
   updatedAt: string;
 }
 
-export async function dbExportSkills(workspaceId: string): Promise<SkillExport[]> {
-  const rows = await dbListSkills(workspaceId);
+export async function dbExportSkills(workspaceId: string, tenantId?: string): Promise<SkillExport[]> {
+  const rows = await dbListSkills(workspaceId, tenantId);
   return rows.map((r) => ({
     id: r.id,
     workspaceId: r.workspace_id,
@@ -194,7 +205,10 @@ export async function dbExportSkills(workspaceId: string): Promise<SkillExport[]
   }));
 }
 
-export async function dbImportSkills(skills: SkillExport[]): Promise<{ imported: number; skipped: number }> {
+export async function dbImportSkills(
+  skills: SkillExport[],
+  tenantId?: string,
+): Promise<{ imported: number; skipped: number }> {
   const db = await ensureDb();
   let imported = 0;
   let skipped = 0;
@@ -203,6 +217,13 @@ export async function dbImportSkills(skills: SkillExport[]): Promise<{ imported:
     if (existing) {
       skipped++;
       continue;
+    }
+    if (tenantId) {
+      const workspace = getRow(db, `SELECT tenant_id FROM workspaces WHERE id = ?`, [s.workspaceId]);
+      if (!workspace || String(workspace.tenant_id ?? "") !== tenantId) {
+        skipped++;
+        continue;
+      }
     }
     runStmt(db,
       `INSERT INTO skills (id, workspace_id, trigger, trigger_embedding_json, name, description, tool_sequence_json, success_count, failure_count, pinned)

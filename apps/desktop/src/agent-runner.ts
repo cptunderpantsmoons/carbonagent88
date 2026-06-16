@@ -2,9 +2,20 @@
  * Agent Runner — Shared execution logic for both IPC and watcher triggers.
  */
 
-import { AgentRuntime, createProvider, BrowserHarness, CodeHarness, LocalHarness, HarnessRegistry, OrchestrationRuntime, type ToolExecutor } from "@carbon-agent/core-runtime";
+import {
+  AgentRuntime,
+  createProvider,
+  BrowserHarness,
+  CodeHarness,
+  LocalHarness,
+  HarnessRegistry,
+  OrchestrationRuntime,
+  type ToolExecutor,
+  type PermissionResolver,
+} from "@carbon-agent/core-runtime";
 import type { LLMProvider } from "@carbon-agent/core-runtime";
-import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole } from "@carbon-agent/local-store";
+import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole, listUserPermissions } from "@carbon-agent/local-store";
+import type { SessionPayload } from "./auth.js";
 import type { ModelRoleName } from "@carbon-agent/local-store";
 import { parseFile, chunkText, storeChunks, searchChunks, getEmbeddingProvider } from "@carbon-agent/ingestion";
 import { generateDocument } from "./document-generator.js";
@@ -27,6 +38,7 @@ export interface RunAgentInput {
   runId?: string;
   defaultProfileId?: string;
   onRuntime?: (runtime: { cancel(): void }) => void;
+  session?: SessionPayload;
   sessionId?: string;
   sessionGoal?: string;
   sessionRoot?: {
@@ -91,6 +103,26 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     createdAt: providerRow.created_at as string,
     updatedAt: providerRow.updated_at as string,
   };
+
+  // Build permission resolver from session / workspace membership when available.
+  let permissionResolver: PermissionResolver | undefined;
+  if (input.session?.userId) {
+    const userPerms = await listUserPermissions(db, input.session.userId, workspaceId);
+    const granted = new Set<string>(userPerms);
+    // Map fine-grained tool permissions to coarse-grained RBAC permissions.
+    const coarseToolPerms: Record<string, string[]> = {
+      "tools:browser": ["run:create", "workspace:write"],
+      "tools:terminal": ["run:create", "workspace:write"],
+      "tools:file": ["workspace:write", "memory:write"],
+      "tools:mcp": ["connector:manage", "run:create"],
+    };
+    permissionResolver = (permission: string): boolean => {
+      if (granted.has(permission)) return true;
+      const coarse = coarseToolPerms[permission];
+      if (coarse) return coarse.some((p) => granted.has(p));
+      return false;
+    };
+  }
 
   await db.updateRunStatus(runId, "running", { model: providerConfig.model, startedAt: new Date().toISOString() });
   await db.addMessage({ id: crypto.randomUUID(), conversationId, role: "user", content: message });
@@ -286,7 +318,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
 
       const subRuntime = new AgentRuntime(
-        { providerConfig: subProviderConfig, runId: subRunId, workspaceId: wsId, conversationId, maxSteps: subMaxSteps, systemPrompt },
+        { providerConfig: subProviderConfig, runId: subRunId, workspaceId: wsId, conversationId, maxSteps: subMaxSteps, systemPrompt, permissionResolver },
         subExecutor,
       );
 
@@ -348,7 +380,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     },
   };
 
-  const runtime = new AgentRuntime({ providerConfig, runId, workspaceId, conversationId, maxSteps }, executor);
+  const runtime = new AgentRuntime({ providerConfig, runId, workspaceId, conversationId, maxSteps, permissionResolver }, executor);
   input.onRuntime?.({
     cancel() {
       abortController.abort();
@@ -495,7 +527,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         };
         const systemPrompt = `You are a ${role} sub-agent. Complete the assigned task using available tools. Be thorough and return clear results.\n\nTask from supervisor: ${task}\n\nAdditional context: ${context ?? "None"}`;
         const subRuntime = new AgentRuntime(
-          { providerConfig, runId: subRunId, workspaceId: wsId, conversationId, maxSteps: subMaxSteps, systemPrompt },
+          { providerConfig, runId: subRunId, workspaceId: wsId, conversationId, maxSteps: subMaxSteps, systemPrompt, permissionResolver },
           subExecutor,
         );
         let finalResult = "";
@@ -510,6 +542,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     const orchestrationDeps: ConstructorParameters<typeof OrchestrationRuntime>[0] = {
       maxRounds: maxSteps,
       harnessRegistry,
+      permissionResolver,
       executor: {
         stealth_open: executor.stealth_open,
         stealth_scrape: executor.stealth_scrape,
@@ -573,6 +606,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             conversationId,
             maxSteps: 20,
             systemPrompt: `You are a ${role} output specialist. Turn validated evidence into the final deliverable.`,
+            permissionResolver,
           },
           executor,
         );

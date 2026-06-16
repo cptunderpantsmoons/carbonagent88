@@ -482,6 +482,7 @@ export const SessionEventKindSchema = z.enum([
   "browser_action_completed",
   "harness_action_started",
   "harness_action_completed",
+  "action_denied",
   "document_discovered",
   "document_acquired",
   "working_set_updated",

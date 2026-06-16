@@ -21,9 +21,19 @@ import { estimateTokens } from "./token-counter.js";
 // Memory System Types
 // ---------------------------------------------------------------------------
 
+export type WorkspaceMembershipResolver = (workspaceId: string, userId: string) => boolean;
+
 export interface MemorySystemConfig {
   workspaceId: string;
   maxTokens: number;
+  /** Optional user id for workspace membership checks. */
+  userId?: string;
+  /**
+   * Optional resolver that decides whether the configured userId is a member
+   * of the requested workspace. When provided, memory reads and writes are
+   * gated by the resolver.
+   */
+  membershipResolver?: WorkspaceMembershipResolver;
   semantic: {
     maxMemories: number;
     decayRate: number;
@@ -108,6 +118,8 @@ export class AgenticMemorySystem extends EventEmitter {
     this.config = {
       workspaceId: config.workspaceId ?? "default",
       maxTokens: config.maxTokens ?? 8192,
+      userId: config.userId,
+      membershipResolver: config.membershipResolver,
       semantic: {
         maxMemories: config.semantic?.maxMemories ?? 10000,
         decayRate: config.semantic?.decayRate ?? 0.01,
@@ -205,6 +217,7 @@ export class AgenticMemorySystem extends EventEmitter {
       embedding?: number[];
     } = {},
   ): SemanticMemoryEntry {
+    this.assertWorkspaceAccess();
     return this.semanticMemory.store({
       id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       workspaceId: this.config.workspaceId,
@@ -222,6 +235,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Recall facts and knowledge.
    */
   async recallMemory(query: string, limit: number = 5): Promise<SemanticMemoryResult[]> {
+    this.assertWorkspaceAccess();
     return this.semanticMemory.recall({
       query,
       workspaceId: this.config.workspaceId,
@@ -233,6 +247,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * List all semantic memories.
    */
   listMemories(limit?: number): SemanticMemoryEntry[] {
+    this.assertWorkspaceAccess();
     return this.semanticMemory.list(this.config.workspaceId, limit);
   }
 
@@ -240,6 +255,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Delete a semantic memory.
    */
   deleteMemory(id: string): boolean {
+    this.assertWorkspaceAccess();
     return this.semanticMemory.delete(id);
   }
 
@@ -256,6 +272,7 @@ export class AgenticMemorySystem extends EventEmitter {
     details: Record<string, unknown> = {},
     outcome: EpisodicOutcome = "success",
   ): EpisodicEvent {
+    this.assertWorkspaceAccess();
     return this.episodicMemory.record({
       id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       workspaceId: this.config.workspaceId,
@@ -280,6 +297,7 @@ export class AgenticMemorySystem extends EventEmitter {
     limit?: number;
     usePersistence?: boolean;
   } = {}) {
+    this.assertWorkspaceAccess();
     return this.episodicMemory.query({
       workspaceId: this.config.workspaceId,
       type: options.type,
@@ -295,6 +313,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Get recent events.
    */
   getRecentEvents(limit: number = 10): EpisodicEvent[] {
+    this.assertWorkspaceAccess();
     return this.episodicMemory.getRecent(this.config.workspaceId, limit);
   }
 
@@ -306,6 +325,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Store or update a graph node.
    */
   storeGraphNode(node: Omit<GraphNode, "mentionCount" | "createdAt">): GraphNode {
+    this.assertWorkspaceAccess();
     return this.graphMemory.addNode(node);
   }
 
@@ -313,6 +333,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Get a graph node by ID.
    */
   getGraphNode(id: string): GraphNode | null {
+    this.assertWorkspaceAccess();
     return this.graphMemory.getNode(id);
   }
 
@@ -324,6 +345,7 @@ export class AgenticMemorySystem extends EventEmitter {
     label?: string;
     limit?: number;
   } = {}): GraphNode[] {
+    this.assertWorkspaceAccess();
     return this.graphMemory.listNodes(this.config.workspaceId, options.type, options.limit);
   }
 
@@ -331,6 +353,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Store or update a graph edge.
    */
   storeGraphEdge(edge: Omit<GraphEdge, "createdAt">): GraphEdge | null {
+    this.assertWorkspaceAccess();
     return this.graphMemory.addEdge(edge);
   }
 
@@ -341,6 +364,7 @@ export class AgenticMemorySystem extends EventEmitter {
     relationType?: string;
     limit?: number;
   } = {}): GraphEdge[] {
+    this.assertWorkspaceAccess();
     return this.graphMemory.listEdges(this.config.workspaceId, options.relationType, options.limit);
   }
 
@@ -348,6 +372,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Delete a graph node and its connected edges.
    */
   deleteGraphNode(id: string): boolean {
+    this.assertWorkspaceAccess();
     return this.graphMemory.deleteNode(id);
   }
 
@@ -355,6 +380,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Delete a graph edge.
    */
   deleteGraphEdge(id: string): boolean {
+    this.assertWorkspaceAccess();
     return this.graphMemory.deleteEdge(id);
   }
 
@@ -367,6 +393,7 @@ export class AgenticMemorySystem extends EventEmitter {
     hops?: number;
     limit?: number;
   } = {}): Array<{ node: GraphNode; edge: GraphEdge; depth: number }> {
+    this.assertWorkspaceAccess();
     const results: Array<{ node: GraphNode; edge: GraphEdge; depth: number }> = [];
     const seen = new Set<string>();
     const startNodeIds = options.nodeIds ?? [];
@@ -398,6 +425,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Get graph memory statistics.
    */
   graphStats(): GraphStats {
+    this.assertWorkspaceAccess();
     return this.graphMemory.getStats(this.config.workspaceId);
   }
 
@@ -409,6 +437,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Query across all memory tiers.
    */
   async query(memoryQuery: MemoryQuery): Promise<MemoryQueryResult> {
+    this.assertWorkspaceAccess();
     const startTime = Date.now();
     const limit = memoryQuery.limit ?? 10;
 
@@ -477,6 +506,7 @@ export class AgenticMemorySystem extends EventEmitter {
     context: string,
     maxTokens: number = 1000,
   ): Promise<MemoryInjection> {
+    this.assertWorkspaceAccess();
     const injection: MemoryInjection = {
       semantic: [],
       episodic: [],
@@ -541,6 +571,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Inject memories into working memory context.
    */
   async injectMemories(context: string): Promise<void> {
+    this.assertWorkspaceAccess();
     const injection = await this.getMemoryInjection(context);
 
     if (injection.semantic.length > 0 || injection.episodic.length > 0 || injection.graph.length > 0) {
@@ -594,6 +625,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Run memory consolidation.
    */
   async consolidate(): Promise<ConsolidationResult> {
+    this.assertWorkspaceAccess();
     return this.consolidation.consolidate(this.config.workspaceId);
   }
 
@@ -619,6 +651,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Get comprehensive memory system stats.
    */
   getStats(): MemorySystemStats {
+    this.assertWorkspaceAccess();
     const semanticStats = this.semanticMemory.getStats(this.config.workspaceId);
     const episodicStats = this.episodicMemory.getStats(this.config.workspaceId);
     const consolidationHistory = this.consolidation.getHistory(1);
@@ -653,6 +686,7 @@ export class AgenticMemorySystem extends EventEmitter {
    * Initialize the memory system.
    */
   async initialize(): Promise<void> {
+    this.assertWorkspaceAccess();
     // Hydrate graph memory from persistence
     await this.graphMemory.init(this.config.workspaceId);
 
@@ -673,6 +707,21 @@ export class AgenticMemorySystem extends EventEmitter {
   async shutdown(): Promise<void> {
     this.stopConsolidation();
     this.emit("shutdown");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Access Control
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Verify workspace membership when a membershipResolver is configured.
+   */
+  private assertWorkspaceAccess(workspaceId = this.config.workspaceId): void {
+    if (!this.config.membershipResolver) return;
+    if (!this.config.userId) return;
+    if (!this.config.membershipResolver(workspaceId, this.config.userId)) {
+      throw new Error(`Access denied: user ${this.config.userId} is not a member of workspace ${workspaceId}`);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -759,6 +808,7 @@ export class AgenticMemorySystem extends EventEmitter {
     episodicMemory: ReturnType<EpisodicMemory['exportData']>;
     graphMemory: ReturnType<GraphMemory['exportData']>;
   } {
+    this.assertWorkspaceAccess();
     return {
       workingMemory: this.workingMemory.getState(),
       semanticMemory: this.semanticMemory.exportData(),
@@ -776,6 +826,7 @@ export class AgenticMemorySystem extends EventEmitter {
     episodicMemory?: Parameters<EpisodicMemory['importData']>[0];
     graphMemory?: Parameters<GraphMemory['importData']>[0];
   }): void {
+    this.assertWorkspaceAccess();
     if (data.workingMemory) {
       this.workingMemory.restoreState(data.workingMemory);
     }

@@ -22,6 +22,8 @@ import { CachingProvider } from "./cache/caching-provider.js";
 import type { ResponseCache, SemanticCache } from "./cache/index.js";
 import { MCPClient, MCPToolAdapter } from "./mcp-integration.js";
 import { SkillAdvisor } from "./skills/index.js";
+import type { PermissionResolver } from "./security/tool-guard.js";
+import { permitTool } from "./security/tool-guard.js";
 import type { MCPServerConfig } from "@carbon-agent/shared-schemas";
 import type {
   AgentRole,
@@ -93,6 +95,8 @@ export interface EnterpriseHarnessConfig {
   };
   /** Enable in-memory skill learning via SkillAdvisor. */
   enableSkillLearning?: boolean;
+  /** Optional permission resolver injected from the desktop/session layer. */
+  permissionResolver?: PermissionResolver;
 }
 
 export interface FallbackStrategy {
@@ -182,6 +186,18 @@ export class EnterpriseAgentHarness extends EventEmitter {
 
   getToolsByCategory(category: EnterpriseTool["category"]): EnterpriseTool[] {
     return Array.from(this.toolRegistry.values()).filter((t) => t.category === category);
+  }
+
+  /**
+   * List registered tools, optionally filtered by a permission resolver.
+   * Tools without permission metadata are always returned.
+   */
+  listTools(userPermissions?: PermissionResolver): EnterpriseTool[] {
+    const tools = Array.from(this.toolRegistry.values());
+    if (!userPermissions) {
+      return tools;
+    }
+    return tools.filter((tool) => permitTool(tool.permissions, userPermissions));
   }
 
   setToolExecutor(executor: EnterpriseToolExecutor): void {
@@ -439,6 +455,7 @@ export class EnterpriseAgentHarness extends EventEmitter {
           systemPrompt: this.buildSystemPrompt(def),
           maxSteps: def.maxSteps,
           tools,
+          permissionResolver: this.config.permissionResolver,
         },
         executor,
       );
@@ -496,6 +513,11 @@ export class EnterpriseAgentHarness extends EventEmitter {
             throw new Error(`Tool ${name} not registered`);
           }
 
+          if (this.config.permissionResolver && !permitTool(tool.permissions, this.config.permissionResolver)) {
+            this.emit("action:denied", { tool: name, permissions: tool.permissions });
+            throw new Error(`Permission denied for tool ${name}`);
+          }
+
           // Route MCP-registered tools directly through the MCP adapter
           if (tool.category === "mcp" && name.startsWith("mcp_")) {
             const result = await this.mcpToolAdapter.createExecutor()(tool, input);
@@ -538,6 +560,7 @@ export class EnterpriseAgentHarness extends EventEmitter {
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema,
+          permissions: tool.permissions,
         });
       }
     }

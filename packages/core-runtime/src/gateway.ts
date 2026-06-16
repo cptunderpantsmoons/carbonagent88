@@ -26,6 +26,11 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * Optional RBAC permissions required to execute this tool.
+   * When present, the runtime will check these before invoking the executor.
+   */
+  permissions?: string[];
 }
 
 export interface ChatRequest {

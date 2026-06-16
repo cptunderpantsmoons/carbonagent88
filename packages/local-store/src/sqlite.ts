@@ -1284,8 +1284,18 @@ export class CarbonDatabase {
   }
 
   // ==================== SKILLS ====================
-  async listSkills(workspaceId: string) {
+  async listSkills(workspaceId: string, tenantId?: string) {
     const db = await ensureDb();
+    if (tenantId) {
+      return getRows(
+        db,
+        `SELECT s.* FROM skills s
+         JOIN workspaces w ON s.workspace_id = w.id
+         WHERE s.workspace_id = ? AND w.tenant_id = ?
+         ORDER BY s.updated_at DESC`,
+        [workspaceId, tenantId],
+      );
+    }
     return getRows(db, "SELECT * FROM skills WHERE workspace_id = ? ORDER BY updated_at DESC", [workspaceId]);
   }
 

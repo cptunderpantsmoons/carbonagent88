@@ -93,10 +93,40 @@ export const EnterpriseToolSchema = z.object({
   inputSchema: z.record(z.unknown()),
   timeout: z.number().int().positive().optional(),
   retries: z.number().int().nonnegative().optional(),
+  /**
+   * Permissions required to register, list, or execute this tool.
+   *
+   * Examples:
+   * - tools:browser — browser automation
+   * - tools:terminal — terminal/command execution
+   * - tools:file — file read/write/edit tools
+   * - tools:mcp — MCP-provided tools
+   * - skills:write — skill authoring
+   * - memory:write — memory mutation
+   */
   permissions: z.array(z.string()).optional(),
 });
 
 export type EnterpriseTool = z.infer<typeof EnterpriseToolSchema>;
+
+/**
+ * Common permission constants referenced by tool definitions.
+ */
+export const CategoryPermissions = {
+  tools: {
+    browser: "tools:browser",
+    terminal: "tools:terminal",
+    file: "tools:file",
+    mcp: "tools:mcp",
+  },
+  skills: {
+    write: "skills:write",
+    admin: "skills:admin",
+  },
+  memory: {
+    write: "memory:write",
+  },
+} as const;
 
 // ---------------------------------------------------------------------------
 // Tool Execution Result

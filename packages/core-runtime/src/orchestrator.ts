@@ -109,12 +109,12 @@ export interface ReflectionResult {
  */
 export class SupervisorOrchestrator {
   private provider: LLMProvider;
-  private baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId">;
+  private baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId" | "permissionResolver">;
   private executor: ToolExecutor;
   private subAgentHistories: Map<string, AgentStep[]> = new Map();
 
   constructor(
-    baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId">,
+    baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId" | "permissionResolver">,
     executor: ToolExecutor,
   ) {
     this.provider = createProvider(baseConfig.providerConfig!);

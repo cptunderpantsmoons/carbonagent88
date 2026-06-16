@@ -15,6 +15,7 @@ export interface SkillOutcomeContext {
   toolCalls?: Array<{ name: string; success: boolean; duration: number }>;
   variantId?: string;
   errorType?: string;
+  workspaceId?: string;
 }
 
 export class SkillAdvisor {
@@ -42,7 +43,7 @@ export class SkillAdvisor {
 
     this.outcomeTracker.record({
       skillId,
-      workspaceId: "default",
+      workspaceId: context?.workspaceId ?? "default",
       success,
       duration,
       errorType: context?.errorType,

@@ -249,7 +249,7 @@ export class MCPToolAdapter {
         category: "mcp",
         inputSchema: mcpTool.inputSchema,
         timeout: 30000,
-        permissions: ["mcp"],
+        permissions: ["tools:mcp"],
       });
     }
 

@@ -9,6 +9,11 @@ export * from "./mcp-integration.js";
 export * from "./memory/index.js";
 export * from "./cache/index.js";
 export * from "./skills/index.js";
+export {
+  createToolGuard,
+  permitTool,
+  type PermissionResolver,
+} from "./security/tool-guard.js";
 export { AnthropicProvider } from "./providers/anthropic.js";
 export { OpenAIProvider } from "./providers/openai.js";
 export { CustomOpenAIProvider } from "./providers/custom-openai.js";

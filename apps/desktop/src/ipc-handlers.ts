@@ -1155,6 +1155,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
             message: request.message,
             maxSteps: 50,
             runId: request.id,
+            session,
             onRuntime: (runtime) => {
               activeRuns.set(request.id, runtime);
             },
@@ -1214,6 +1215,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
             providerId: String(run.provider_id),
             message: String(row.current_goal),
             runId,
+            session,
             sessionId: String(row.id),
             sessionGoal: String(row.current_goal),
             sessionRoot: root,
@@ -1360,7 +1362,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "document/reveal.success" };
       }
       case "skills/list": {
-        const rows = await d.listSkills(request.workspaceId);
+        const rows = await d.listSkills(request.workspaceId, session.tenantId);
         return { type: "skills/list.success", data: rows.map((row) => mapSkillRow(row as Record<string, unknown>)) };
       }
       case "skills/pin": {
@@ -1372,11 +1374,11 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "skills/delete.success" };
       }
       case "skills/export": {
-        const exported = await dbExportSkills(request.workspaceId);
+        const exported = await dbExportSkills(request.workspaceId, session.tenantId);
         return { type: "skills/export.success", data: exported };
       }
       case "skills/import": {
-        const result = await dbImportSkills(request.data as Parameters<typeof dbImportSkills>[0]);
+        const result = await dbImportSkills(request.data as Parameters<typeof dbImportSkills>[0], session.tenantId);
         return { type: "skills/import.success", data: result };
       }
 

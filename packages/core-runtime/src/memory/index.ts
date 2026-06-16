@@ -93,7 +93,7 @@ export {
   createMemorySystem,
   type MemorySystemConfig,
   type MemoryInjection,
-  type MemorySystemStats,
   type MemoryQuery,
   type MemoryQueryResult,
+  type WorkspaceMembershipResolver,
 } from "./system.js";

@@ -1,5 +1,8 @@
 // Harness abstraction layer — no agent.ts or gateway.js deps at top level
 
+import type { PermissionResolver } from "./security/tool-guard.js";
+import { permitTool } from "./security/tool-guard.js";
+
 export interface HarnessCapability {
   name: string;
   description: string;
@@ -81,6 +84,8 @@ export interface OrchestrationHarnessDeps {
   validator(input: HarnessValidatorInput): Promise<HarnessValidationResult>;
   judge(input: HarnessJudgeInput): Promise<{ complete: boolean; gaps: string[]; summary: string; driftDetected?: boolean; driftGaps?: string[] }>;
   maxRounds?: number;
+  /** Optional permission resolver for harness-level tool gating. */
+  permissionResolver?: PermissionResolver;
 }
 
 export interface HarnessEventLike {
@@ -92,6 +97,7 @@ export interface HarnessEventLike {
     | "plan_updated"
     | "harness_action_started"
     | "harness_action_completed"
+    | "action_denied"
     | "document_discovered"
     | "document_acquired"
     | "working_set_updated"
@@ -252,6 +258,7 @@ async function executeWithHarness(
   plan: HarnessPlan,
   harnessRegistry: HarnessRegistry,
   executor: HarnessExecutorDeps,
+  deps?: { onEvent?: (event: Omit<HarnessEventLike, "id" | "createdAt">) => Promise<void> | void; permissionResolver?: PermissionResolver },
 ): Promise<HarnessCollectionResult> {
   const harness = harnessRegistry.get(plan.harnessId) ?? harnessRegistry.byType("browser")[0];
   const profileId = input.profileId ?? input.workspaceId;
@@ -297,6 +304,31 @@ async function executeWithHarness(
     } else if (harnessResult.error) {
       gaps.push(`Harness ${harness.id} error: ${harnessResult.error}`);
     }
+  }
+
+  if (deps?.permissionResolver && !permitTool(["tools:browser"], deps.permissionResolver)) {
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "harness",
+        kind: "action_denied",
+        summary: "Permission denied: tools:browser",
+        payload: { plan: plan.summary, permissions: ["tools:browser"] },
+      }),
+    );
+    gaps.push("Permission denied: tools:browser");
+    provenanceScore = 0;
+    return {
+      summary: `${plan.summary}: browser tools denied`,
+      source: plan.source,
+      query: plan.query,
+      observations,
+      documents,
+      metrics,
+      entities,
+      gaps,
+      provenanceScore: Math.min(1, provenanceScore),
+    };
   }
 
   // Fallback browser operations for URL-based collection even when no harness matched
@@ -443,7 +475,10 @@ export class OrchestrationRuntime {
 
       // Execute all plans in parallel
       const harnessPromises = lastPlans.map((plan) =>
-        executeWithHarness(input, plan, this.deps.harnessRegistry, this.deps.executor)
+        executeWithHarness(input, plan, this.deps.harnessRegistry, this.deps.executor, {
+          onEvent: (event) => this.emit(event),
+          permissionResolver: this.deps.permissionResolver,
+        })
       );
       const settled = await Promise.allSettled(harnessPromises);
 
