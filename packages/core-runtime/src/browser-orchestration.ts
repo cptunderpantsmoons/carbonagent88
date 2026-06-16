@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PermissionResolver } from "./security/tool-guard.js";
 import { permitTool } from "./security/tool-guard.js";
+import { ApprovalCoordinator } from "./harness/approval-coordinator.js";
 
 export interface BrowserOrchestrationInput {
   sessionId: string;
@@ -77,6 +78,7 @@ export interface BrowserCollectionResult {
   entities: Record<string, unknown>[];
   gaps: string[];
   provenanceScore: number;
+  approvalDenied?: boolean;
 }
 
 export interface BrowserValidationResult {
@@ -106,6 +108,8 @@ export interface BrowserOrchestrationRuntimeDeps {
   maxRounds?: number;
   /** Optional permission resolver for browser tool gating. */
   permissionResolver?: PermissionResolver;
+  /** Optional approval coordinator for human-in-the-loop confirmations. */
+  approvalCoordinator?: ApprovalCoordinator;
 }
 
 export interface SessionEventLike {
@@ -184,7 +188,7 @@ async function collectWithBrowserTools(
   input: BrowserOrchestrationInput,
   plan: BrowserPlan,
   browserTools: BrowserOrchestrationRuntimeDeps["browserTools"],
-  deps?: { permissionResolver?: PermissionResolver; onEvent?: (event: Omit<SessionEventLike, "id" | "createdAt">) => Promise<void> | void },
+  deps?: { permissionResolver?: PermissionResolver; onEvent?: (event: Omit<SessionEventLike, "id" | "createdAt">) => Promise<void> | void; approvalCoordinator?: ApprovalCoordinator },
 ): Promise<BrowserCollectionResult> {
   const profileId = input.profileId ?? input.workspaceId;
   const url = plan.url;
@@ -210,6 +214,64 @@ async function collectWithBrowserTools(
       gaps: ["Permission denied: tools:browser"],
       provenanceScore: 0,
     };
+  }
+
+  // Human-in-the-loop confirmation in "confirm" mode.
+  if (input.supervisionMode === "confirm" && deps?.approvalCoordinator) {
+    const coordinator = deps.approvalCoordinator;
+    const correlationId = randomUUID();
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "browser",
+        kind: "judgment_requested",
+        summary: `Approval requested: ${plan.summary}`,
+        payload: { plan, correlationId, supervisionMode: input.supervisionMode },
+      }),
+    );
+    const decision = await coordinator.requestApproval(
+      input.sessionId,
+      "plan-step",
+      `Browser execution: ${plan.summary}`,
+      plan.summary,
+      {
+        priority: "high",
+        correlationId,
+      },
+    );
+    if (decision.decision !== "approved") {
+      const reason = decision.reason ?? "approval denied";
+      await Promise.resolve(
+        deps.onEvent?.({
+          sessionId: input.sessionId,
+          role: "browser",
+          kind: "output_rejected",
+          summary: `Approval ${decision.decision}: ${reason}`,
+          payload: { plan, correlationId, decision },
+        }),
+      );
+      return {
+        summary: `${plan.summary}: ${reason}`,
+        source: plan.source,
+        query: plan.query,
+        observations: [],
+        documents: [],
+        metrics: [],
+        entities: [],
+        gaps: [`Approval ${decision.decision}: ${reason}`],
+        provenanceScore: 0,
+        approvalDenied: true,
+      };
+    }
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "browser",
+        kind: "judgment_returned",
+        summary: `Approval granted: ${plan.summary}`,
+        payload: { plan, correlationId, decision },
+      }),
+    );
   }
 
   await browserTools.stealth_open({ profileId, url });
@@ -363,6 +425,7 @@ export class BrowserOrchestrationRuntime {
       lastBrowserResult = await collectWithBrowserTools(input, lastPlan, this.deps.browserTools, {
         permissionResolver: this.deps.permissionResolver,
         onEvent: (event) => this.emit(event),
+        approvalCoordinator: this.deps.approvalCoordinator,
       });
       await this.emit({
         sessionId: input.sessionId,
@@ -371,6 +434,22 @@ export class BrowserOrchestrationRuntime {
         summary: lastBrowserResult.summary,
         payload: lastBrowserResult as unknown as Record<string, unknown>,
       });
+
+      if (lastBrowserResult.approvalDenied) {
+        await this.emit({
+          sessionId: input.sessionId,
+          role: "main-assistant",
+          kind: "output_rejected",
+          summary: `Approval denied: ${lastBrowserResult.gaps[0] ?? "browser action halted"}`,
+          payload: { reason: lastBrowserResult.gaps[0] ?? "approval denied" },
+        });
+        return {
+          status: "failed",
+          runId: input.runId,
+          fullResponse: `Mission halted: ${lastBrowserResult.gaps[0] ?? "approval denied"}`,
+          runError: lastBrowserResult.gaps[0] ?? "approval denied",
+        };
+      }
 
       workingSet = {
         ...workingSet,

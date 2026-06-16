@@ -187,6 +187,8 @@ export const HarnessExecutionPlanSchema = z.object({
   tasks: z.array(AgentTaskSchema),
   executionOrder: z.array(z.array(z.string().uuid())),
   estimatedDuration: z.number().int().nonnegative(),
+  sessionId: z.string().uuid().optional(),
+  supervisionMode: z.enum(["watch", "confirm"]).default("watch"),
 });
 
 export type HarnessExecutionPlan = z.infer<typeof HarnessExecutionPlanSchema>;

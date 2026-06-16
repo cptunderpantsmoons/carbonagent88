@@ -9,7 +9,6 @@
 import { AgentRuntime, type ToolExecutor, type AgentRunConfig, type AgentStep } from "./agent.js";
 import type { LLMProvider } from "./gateway.js";
 import { createProvider } from "./gateway.js";
-
 export type SubAgentRole = "researcher" | "extractor" | "drafter" | "navigator" | "general" | "claude-code" | "codex";
 
 export interface SubAgentDef {
@@ -109,12 +108,12 @@ export interface ReflectionResult {
  */
 export class SupervisorOrchestrator {
   private provider: LLMProvider;
-  private baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId" | "permissionResolver">;
+  private baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId" | "permissionResolver" | "approvalCoordinator" | "supervisionMode">;
   private executor: ToolExecutor;
   private subAgentHistories: Map<string, AgentStep[]> = new Map();
 
   constructor(
-    baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId" | "permissionResolver">,
+    baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId" | "permissionResolver" | "approvalCoordinator" | "supervisionMode">,
     executor: ToolExecutor,
   ) {
     this.provider = createProvider(baseConfig.providerConfig!);
@@ -129,6 +128,32 @@ export class SupervisorOrchestrator {
   async delegateTask(input: DelegateTaskInput): Promise<DelegateTaskOutput> {
     const def = SUB_AGENT_REGISTRY[input.targetAgentRole] ?? SUB_AGENT_REGISTRY.general;
     const subRunId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Human-in-the-loop confirmation for delegate_task in "confirm" mode.
+    if (this.baseConfig.supervisionMode === "confirm" && this.baseConfig.approvalCoordinator) {
+      const decision = await this.baseConfig.approvalCoordinator.requestApproval(
+        input.workspaceId,
+        "tool",
+        `Delegate task to ${input.targetAgentRole}`,
+        input.taskDescription,
+        {
+          priority: "high",
+          toolName: "delegate_task",
+          arguments: { role: input.targetAgentRole, task: input.taskDescription, context: input.context },
+        },
+      );
+      if (decision.decision !== "approved") {
+        const reason = decision.reason ?? "delegation approval denied";
+        return {
+          success: false,
+          subAgentRole: input.targetAgentRole,
+          result: "",
+          stepsTaken: 0,
+          toolCalls: [],
+          error: reason,
+        };
+      }
+    }
 
     // Build a sub-agent executor that explicitly strips delegation and reflection
     // tools to prevent infinite recursion.

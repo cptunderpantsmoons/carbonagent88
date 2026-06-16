@@ -448,6 +448,24 @@ function initTables(): void {
     CREATE INDEX IF NOT EXISTS idx_tenant_members_user ON tenant_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace ON workspace_members(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
+
+    -- Pending approvals (Phase 6)
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      correlation_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('tool','plan','plan-step')),
+      priority TEXT NOT NULL CHECK(priority IN ('low','medium','high')),
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      tool_name TEXT,
+      arguments_json TEXT NOT NULL DEFAULT '{}',
+      requested_at TEXT NOT NULL,
+      timeout_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','expired')),
+      reason TEXT,
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(session_id, status);
   `);
   ensureBrowserProfileColumns();
   ensureWatcherColumns();
@@ -2477,6 +2495,84 @@ export class CarbonDatabase {
        ORDER BY w.created_at DESC`,
       [userId, tenantId],
     );
+  }
+
+  // ==================== PENDING APPROVALS (Phase 6) ====================
+  async listPendingApprovals(sessionId?: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    if (sessionId) {
+      return getRows(db, "SELECT * FROM pending_approvals WHERE session_id = ? AND status = 'pending' ORDER BY requested_at ASC", [sessionId]);
+    }
+    return getRows(db, "SELECT * FROM pending_approvals WHERE status = 'pending' ORDER BY requested_at ASC");
+  }
+
+  async savePendingApproval(p: {
+    correlationId: string;
+    sessionId: string;
+    kind: string;
+    priority: string;
+    title: string;
+    summary: string;
+    toolName?: string;
+    arguments?: Record<string, unknown>;
+    requestedAt: string;
+    timeoutAt?: string;
+  }): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO pending_approvals
+         (correlation_id, session_id, kind, priority, title, summary, tool_name, arguments_json, requested_at, timeout_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+       ON CONFLICT(correlation_id) DO UPDATE SET
+         session_id = excluded.session_id,
+         kind = excluded.kind,
+         priority = excluded.priority,
+         title = excluded.title,
+         summary = excluded.summary,
+         tool_name = excluded.tool_name,
+         arguments_json = excluded.arguments_json,
+         requested_at = excluded.requested_at,
+         timeout_at = excluded.timeout_at`,
+      [
+        p.correlationId,
+        p.sessionId,
+        p.kind,
+        p.priority,
+        p.title,
+        p.summary,
+        p.toolName ?? null,
+        JSON.stringify(p.arguments ?? {}),
+        p.requestedAt,
+        p.timeoutAt ?? null,
+      ],
+    );
+  }
+
+  async resolvePendingApproval(p: {
+    correlationId: string;
+    decision: "approved" | "rejected";
+    reason?: string;
+  }): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `UPDATE pending_approvals
+       SET status = ?, reason = ?, resolved_at = datetime('now')
+       WHERE correlation_id = ?`,
+      [p.decision, p.reason ?? null, p.correlationId],
+    );
+  }
+
+  async deletePendingApproval(correlationId: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM pending_approvals WHERE correlation_id = ?", [correlationId]);
+  }
+
+  async clearExpiredPendingApprovals(before?: string): Promise<void> {
+    const db = await ensureDb();
+    const threshold = before ?? new Date().toISOString();
+    runStmt(db, "DELETE FROM pending_approvals WHERE status = 'expired' AND resolved_at < ?", [threshold]);
   }
 }
 export { encrypt, decrypt } from "./crypto.js";

@@ -24,6 +24,7 @@ import { MCPClient, MCPToolAdapter } from "./mcp-integration.js";
 import { SkillAdvisor } from "./skills/index.js";
 import type { PermissionResolver } from "./security/tool-guard.js";
 import { permitTool } from "./security/tool-guard.js";
+import { ApprovalCoordinator } from "./harness/approval-coordinator.js";
 import type { MCPServerConfig } from "@carbon-agent/shared-schemas";
 import type {
   AgentRole,
@@ -97,6 +98,8 @@ export interface EnterpriseHarnessConfig {
   enableSkillLearning?: boolean;
   /** Optional permission resolver injected from the desktop/session layer. */
   permissionResolver?: PermissionResolver;
+  /** Optional approval coordinator for human-in-the-loop confirmations. */
+  approvalCoordinator?: ApprovalCoordinator;
 }
 
 export interface FallbackStrategy {
@@ -267,7 +270,7 @@ export class EnterpriseAgentHarness extends EventEmitter {
       tasks: sorted,
       executionOrder,
       estimatedDuration,
-    };
+    } as HarnessExecutionPlan;
   }
 
   private topologicalSort(tasks: AgentTask[]): AgentTask[] {
@@ -342,6 +345,41 @@ export class EnterpriseAgentHarness extends EventEmitter {
     const results: AgentTaskResult[] = [];
     let completed = 0;
     let failed = 0;
+
+    // Human-in-the-loop confirmation in "confirm" mode.
+    if (plan.supervisionMode === "confirm" && this.config.approvalCoordinator) {
+      const coordinator = this.config.approvalCoordinator;
+      const sessionId = plan.sessionId ?? "unknown";
+      const title = plan.tasks.length === 1
+        ? `Execute task: ${plan.tasks[0]!.description}`
+        : `Execute plan with ${plan.tasks.length} tasks`;
+      const summary = `Estimated duration: ${Math.round(plan.estimatedDuration / 1000)}s`;
+      const planId = randomUUID();
+      const decision = await coordinator.requestApproval(
+        sessionId,
+        "plan",
+        title,
+        summary,
+        { priority: "high" },
+      );
+      if (decision.decision !== "approved") {
+        const reason = decision.reason ?? "plan approval denied";
+        this.emit("action:denied", { planId, reason });
+        return {
+          planId,
+          status: "failed",
+          results: [],
+          summary: `plan approval denied${reason ? `: ${reason}` : ""}`,
+          totalDuration: Date.now() - startTime,
+          metrics: {
+            tasksTotal: plan.tasks.length,
+            tasksCompleted: 0,
+            tasksFailed: plan.tasks.length,
+            averageDuration: 0,
+          },
+        };
+      }
+    }
 
     for (const group of plan.executionOrder) {
       // Respect maxConcurrentAgents from config

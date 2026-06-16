@@ -105,6 +105,13 @@ vi.mock("./auth.js", () => ({
 
 vi.mock("@carbon-agent/core-runtime", () => ({
   createProvider: vi.fn(() => ({ testConnection: vi.fn().mockResolvedValue({ ok: true }) })),
+  ApprovalCoordinator: class {
+    requestApproval = vi.fn().mockResolvedValue({ decision: "approved" });
+    approve = vi.fn().mockReturnValue(true);
+    reject = vi.fn().mockReturnValue(true);
+    listPending = vi.fn().mockReturnValue([]);
+    loadFromDb = vi.fn().mockResolvedValue(undefined);
+  },
 }));
 
 vi.mock("@carbon-agent/ingestion", () => ({

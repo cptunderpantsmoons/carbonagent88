@@ -2,6 +2,7 @@
 
 import type { PermissionResolver } from "./security/tool-guard.js";
 import { permitTool } from "./security/tool-guard.js";
+import { ApprovalCoordinator } from "./harness/approval-coordinator.js";
 
 export interface HarnessCapability {
   name: string;
@@ -86,6 +87,8 @@ export interface OrchestrationHarnessDeps {
   maxRounds?: number;
   /** Optional permission resolver for harness-level tool gating. */
   permissionResolver?: PermissionResolver;
+  /** Optional approval coordinator for human-in-the-loop confirmations. */
+  approvalCoordinator?: ApprovalCoordinator;
 }
 
 export interface HarnessEventLike {
@@ -192,6 +195,7 @@ export interface HarnessCollectionResult {
   entities: Record<string, unknown>[];
   gaps: string[];
   provenanceScore: number;
+  approvalDenied?: boolean;
 }
 
 export interface HarnessValidationResult {
@@ -258,7 +262,7 @@ async function executeWithHarness(
   plan: HarnessPlan,
   harnessRegistry: HarnessRegistry,
   executor: HarnessExecutorDeps,
-  deps?: { onEvent?: (event: Omit<HarnessEventLike, "id" | "createdAt">) => Promise<void> | void; permissionResolver?: PermissionResolver },
+  deps?: { onEvent?: (event: Omit<HarnessEventLike, "id" | "createdAt">) => Promise<void> | void; permissionResolver?: PermissionResolver; approvalCoordinator?: ApprovalCoordinator },
 ): Promise<HarnessCollectionResult> {
   const harness = harnessRegistry.get(plan.harnessId) ?? harnessRegistry.byType("browser")[0];
   const profileId = input.profileId ?? input.workspaceId;
@@ -270,6 +274,89 @@ async function executeWithHarness(
   const entities: Record<string, unknown>[] = [];
   const gaps: string[] = [];
   let provenanceScore = 0.4;
+
+  if (deps?.permissionResolver && !permitTool(["tools:browser"], deps.permissionResolver)) {
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "harness",
+        kind: "action_denied",
+        summary: "Permission denied: tools:browser",
+        payload: { plan: plan.summary, permissions: ["tools:browser"] },
+      }),
+    );
+    gaps.push("Permission denied: tools:browser");
+    provenanceScore = 0;
+    return {
+      summary: `${plan.summary}: browser tools denied`,
+      source: plan.source,
+      query: plan.query,
+      observations,
+      documents,
+      metrics,
+      entities,
+      gaps,
+      provenanceScore: Math.min(1, provenanceScore),
+    };
+  }
+
+  // Human-in-the-loop confirmation in "confirm" mode.
+  if (input.supervisionMode === "confirm" && deps?.approvalCoordinator) {
+    const coordinator = deps.approvalCoordinator;
+    const correlationId = crypto.randomUUID();
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "harness",
+        kind: "judgment_requested",
+        summary: `Approval requested: ${plan.summary}`,
+        payload: { plan, correlationId, supervisionMode: input.supervisionMode },
+      }),
+    );
+    const decision = await coordinator.requestApproval(
+      input.sessionId,
+      "plan-step",
+      `Harness execution: ${plan.summary}`,
+      plan.summary,
+      {
+        priority: "high",
+        correlationId,
+      },
+    );
+    if (decision.decision !== "approved") {
+      const reason = decision.reason ?? "approval denied";
+      await Promise.resolve(
+        deps.onEvent?.({
+          sessionId: input.sessionId,
+          role: "harness",
+          kind: "output_rejected",
+          summary: `Approval ${decision.decision}: ${reason}`,
+          payload: { plan, correlationId, decision },
+        }),
+      );
+      return {
+        summary: `${plan.summary}: ${reason}`,
+        source: plan.source,
+        query: plan.query,
+        observations,
+        documents,
+        metrics,
+        entities,
+        gaps: [`Approval ${decision.decision}: ${reason}`],
+        provenanceScore: 0,
+        approvalDenied: true,
+      };
+    }
+    await Promise.resolve(
+      deps.onEvent?.({
+        sessionId: input.sessionId,
+        role: "harness",
+        kind: "judgment_returned",
+        summary: `Approval granted: ${plan.summary}`,
+        payload: { plan, correlationId, decision },
+      }),
+    );
+  }
 
   if (harness) {
     const harnessResult = await harness.spawn({
@@ -304,31 +391,6 @@ async function executeWithHarness(
     } else if (harnessResult.error) {
       gaps.push(`Harness ${harness.id} error: ${harnessResult.error}`);
     }
-  }
-
-  if (deps?.permissionResolver && !permitTool(["tools:browser"], deps.permissionResolver)) {
-    await Promise.resolve(
-      deps.onEvent?.({
-        sessionId: input.sessionId,
-        role: "harness",
-        kind: "action_denied",
-        summary: "Permission denied: tools:browser",
-        payload: { plan: plan.summary, permissions: ["tools:browser"] },
-      }),
-    );
-    gaps.push("Permission denied: tools:browser");
-    provenanceScore = 0;
-    return {
-      summary: `${plan.summary}: browser tools denied`,
-      source: plan.source,
-      query: plan.query,
-      observations,
-      documents,
-      metrics,
-      entities,
-      gaps,
-      provenanceScore: Math.min(1, provenanceScore),
-    };
   }
 
   // Fallback browser operations for URL-based collection even when no harness matched
@@ -478,6 +540,7 @@ export class OrchestrationRuntime {
         executeWithHarness(input, plan, this.deps.harnessRegistry, this.deps.executor, {
           onEvent: (event) => this.emit(event),
           permissionResolver: this.deps.permissionResolver,
+          approvalCoordinator: this.deps.approvalCoordinator,
         })
       );
       const settled = await Promise.allSettled(harnessPromises);
@@ -516,6 +579,24 @@ export class OrchestrationRuntime {
             payload: { plan, round, harnessId: plan.harnessId, error: reason },
           });
         }
+      }
+
+      // If the user rejected (or timed out) any plan, stop the mission gracefully.
+      const denied = lastHarnessResults.find((r) => r.approvalDenied);
+      if (denied) {
+        await this.emit({
+          sessionId: input.sessionId,
+          role: "main-assistant",
+          kind: "output_rejected",
+          summary: `Approval denied: ${denied.gaps[0] ?? "mission halted"}`,
+          payload: { reason: denied.gaps[0] ?? "approval denied" },
+        });
+        return {
+          status: "failed",
+          runId: input.runId,
+          fullResponse: `Mission halted: ${denied.gaps[0] ?? "approval denied"}`,
+          runError: denied.gaps[0] ?? "approval denied",
+        };
       }
 
       // Merge all successful results into working set

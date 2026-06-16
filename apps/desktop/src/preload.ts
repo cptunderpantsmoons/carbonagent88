@@ -9,9 +9,9 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
-import type { IpcRequest, IpcResponse } from "@carbon-agent/shared-schemas";
-import type { SessionEvent } from "@carbon-agent/shared-schemas";
+import type { IpcRequest, IpcResponse, SessionEvent } from "@carbon-agent/shared-schemas";
 import type { DesktopAXTreeNode, DesktopTopologyEdge, DesktopTopologyNode, DesktopViewportFrame, DesktopWatcherRun } from "./desktop-events.js";
+import type { ApprovalResolvedPayload, ApprovalRequestedPayload } from "./desktop-events.js";
 
 export interface CarbonAPI {
   invoke(request: IpcRequest): Promise<IpcResponse>;
@@ -23,6 +23,8 @@ export interface CarbonAPI {
   onSessionUpdate?: (callback: (data: { sessionId: string; status: string; currentGoal: string }) => void) => () => void;
   onSessionWorkingSet?: (callback: (data: { sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }) => void) => () => void;
   onSessionEvent?: (callback: (data: { sessionId: string; event: SessionEvent }) => void) => () => void;
+  onApprovalRequested?: (callback: (data: ApprovalRequestedPayload) => void) => () => void;
+  onApprovalResolved?: (callback: (data: ApprovalResolvedPayload) => void) => () => void;
 }
 
 function createListener<T>(channel: string) {
@@ -46,6 +48,8 @@ const api: CarbonAPI = {
   onSessionUpdate: createListener<{ sessionId: string; status: string; currentGoal: string }>("carbon-event:session-update"),
   onSessionWorkingSet: createListener<{ sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }>("carbon-event:session-working-set"),
   onSessionEvent: createListener<{ sessionId: string; event: SessionEvent }>("carbon-event:session-event"),
+  onApprovalRequested: createListener<ApprovalRequestedPayload>("carbon-event:approval-requested"),
+  onApprovalResolved: createListener<ApprovalResolvedPayload>("carbon-event:approval-resolved"),
 };
 
 contextBridge.exposeInMainWorld("carbonAPI", api);

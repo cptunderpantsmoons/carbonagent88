@@ -14,6 +14,16 @@ export {
   permitTool,
   type PermissionResolver,
 } from "./security/tool-guard.js";
+
+export {
+  ApprovalCoordinator,
+  type ApprovalCoordinatorOptions,
+  type ApprovalRequest,
+  type ApprovalDecision,
+  type ApprovalKind,
+  type ApprovalPriority,
+} from "./harness/approval-coordinator.js";
+
 export { AnthropicProvider } from "./providers/anthropic.js";
 export { OpenAIProvider } from "./providers/openai.js";
 export { CustomOpenAIProvider } from "./providers/custom-openai.js";

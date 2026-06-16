@@ -45,6 +45,20 @@ type SessionWorkingSet = {
   updatedAt: string;
 };
 
+type PendingApproval = {
+  correlationId: string;
+  sessionId: string;
+  kind: "tool" | "plan" | "plan-step";
+  priority: "low" | "medium" | "high";
+  title: string;
+  summary: string;
+  toolName?: string;
+  arguments?: Record<string, unknown>;
+  requestedAt: string;
+  timeoutAt?: string;
+  expired?: boolean;
+};
+
 type ErrorResponse = { type: "error"; error: string; code?: string };
 type SessionGetResponse = { type: "session/get.success"; data: OrchestrationSession } | ErrorResponse;
 type SessionEventsResponse = { type: "session/events.success"; events: SessionEvent[] } | ErrorResponse;
@@ -65,6 +79,7 @@ type SessionViewState = {
   session: OrchestrationSession | null;
   events: SessionEvent[];
   workingSet: SessionWorkingSet | null;
+  approvals: PendingApproval[];
   cleanup: Array<() => void>;
   renderToken: number;
 };
@@ -73,9 +88,12 @@ const state: SessionViewState = {
   session: null,
   events: [],
   workingSet: null,
+  approvals: [],
   cleanup: [],
   renderToken: 0,
 };
+
+let approvalTimers: ReturnType<typeof setTimeout>[] = [];
 
 function deriveDriftState(events: SessionEvent[]): { detected: boolean; gaps: string[] } {
   const driftEvents = events.filter((e) => e.kind === "drift_detected");
@@ -93,6 +111,10 @@ export function cleanupSessionView(): void {
   for (const dispose of state.cleanup.splice(0)) {
     try { dispose(); } catch { /* noop */ }
   }
+  for (const timer of approvalTimers) {
+    clearTimeout(timer);
+  }
+  approvalTimers = [];
   state.renderToken += 1;
 }
 
@@ -136,6 +158,11 @@ export function renderSessionView(container: HTMLElement): void {
   const pipeline = document.createElement("div");
   pipeline.className = "mc-pipeline";
   pipeline.innerHTML = `<div class="mc-pipeline-track" id="mc-pipeline"></div>`;
+
+  // ── Pending Approvals ─────────────────────────────────────────────────
+  const approvalsPanel = document.createElement("div");
+  approvalsPanel.className = "mc-approvals-panel";
+  approvalsPanel.id = "mc-approvals-panel";
 
   // ── Main Grid ───────────────────────────────────────────────────────
   const grid = document.createElement("div");
@@ -212,7 +239,7 @@ export function renderSessionView(container: HTMLElement): void {
   rightCol.append(evidencePanel, consistencyPanel, gapsPanel);
 
   grid.append(leftCol, rightCol);
-  shell.append(missionHeader, pipeline, grid);
+  shell.append(missionHeader, pipeline, approvalsPanel, grid);
   container.appendChild(shell);
 
   // Cache element refs
@@ -222,6 +249,7 @@ export function renderSessionView(container: HTMLElement): void {
   const mcElapsed = missionHeader.querySelector("#mc-elapsed") as HTMLElement;
   const mcProvenanceWrap = missionHeader.querySelector("#mc-provenance-wrap") as HTMLElement;
   const mcPipeline = pipeline.querySelector("#mc-pipeline") as HTMLElement;
+  const mcApprovalsPanel = approvalsPanel;
   const mcHarnessList = harnessPanel.querySelector("#mc-harness-list") as HTMLElement;
   const mcTimeline = timelinePanel.querySelector("#mc-timeline") as HTMLElement;
   const mcEvidenceGrid = evidencePanel.querySelector("#mc-evidence-grid") as HTMLElement;
@@ -233,6 +261,8 @@ export function renderSessionView(container: HTMLElement): void {
     onSessionUpdate?: (callback: (data: { sessionId: string; status: string; currentGoal: string }) => void) => (() => void);
     onSessionWorkingSet?: (callback: (data: { sessionId: string; documents: unknown[]; gaps: string[]; provenanceScore: number }) => void) => (() => void);
     onSessionEvent?: (callback: (data: { sessionId: string; event: SessionEvent }) => void) => (() => void);
+    onApprovalRequested?: (callback: (data: PendingApproval) => void) => (() => void);
+    onApprovalResolved?: (callback: (data: { request: PendingApproval; decision: { decision: "approved" | "rejected"; reason?: string } }) => void) => (() => void);
   };
 
   // Elapsed timer
@@ -291,15 +321,35 @@ export function renderSessionView(container: HTMLElement): void {
   });
   if (eventUnsub) state.cleanup.push(eventUnsub);
 
+  const approvalRequestedUnsub = carbonAPI.onApprovalRequested?.((req) => {
+    if (req.sessionId !== sessionId) return;
+    if (!state.approvals.some((a) => a.correlationId === req.correlationId)) {
+      state.approvals.push(req);
+    }
+    renderApprovals(mcApprovalsPanel);
+  });
+  if (approvalRequestedUnsub) state.cleanup.push(approvalRequestedUnsub);
+
+  const approvalResolvedUnsub = carbonAPI.onApprovalResolved?.((payload) => {
+    if (payload.request.sessionId !== sessionId) return;
+    state.approvals = state.approvals.filter((a) => a.correlationId !== payload.request.correlationId);
+    renderApprovals(mcApprovalsPanel);
+  });
+  if (approvalResolvedUnsub) state.cleanup.push(approvalResolvedUnsub);
+
   void hydrateSession();
 
   async function hydrateSession(): Promise<void> {
     const currentToken = renderToken;
     try {
-      const [sessionResp, eventsResp, workingSetResp] = await Promise.all([
+      const [sessionResp, eventsResp, workingSetResp, approvalsResp] = await Promise.all([
         window.carbonAPI.invoke({ type: "session/get", id: sessionId }) as Promise<SessionGetResponse>,
         window.carbonAPI.invoke({ type: "session/events", id: sessionId }) as Promise<SessionEventsResponse>,
         window.carbonAPI.invoke({ type: "session/working-set", id: sessionId }) as Promise<SessionWorkingSetResponse>,
+        window.carbonAPI.invoke({ type: "session/approvals", sessionId }) as Promise<
+          | { type: "session/approvals.success"; approvals: PendingApproval[] }
+          | ErrorResponse
+        >,
       ]);
       if (currentToken !== state.renderToken) return;
 
@@ -312,6 +362,9 @@ export function renderSessionView(container: HTMLElement): void {
       if (workingSetResp.type === "session/working-set.success") {
         state.workingSet = workingSetResp.data;
       }
+      if (approvalsResp.type === "session/approvals.success") {
+        state.approvals = approvalsResp.approvals ?? [];
+      }
 
       mcGoal.textContent = state.session?.currentGoal || "No goal set";
       mcSessionId.textContent = sessionId;
@@ -319,6 +372,7 @@ export function renderSessionView(container: HTMLElement): void {
       if (state.session) startElapsedTimer(state.session.createdAt);
       mcProvenanceWrap.innerHTML = renderProvenanceRadialSVG(state.workingSet?.provenanceScore ?? 0);
       renderPipeline(mcPipeline);
+      renderApprovals(mcApprovalsPanel);
       renderHarnesses(mcHarnessList);
       renderTimeline(mcTimeline);
       renderEvidence(mcEvidenceGrid, mcEvidenceCount);
@@ -589,6 +643,161 @@ function renderDriftItem(gap: string): HTMLDivElement {
     <span class="mc-drift-text">${escapeHtml(gap)}</span>
   `;
   return item;
+}
+
+// ── Pending Approvals ───────────────────────────────────────────────────
+
+function renderApprovals(container: HTMLElement): void {
+  // Clear existing timers
+  for (const timer of approvalTimers) clearTimeout(timer);
+  approvalTimers = [];
+  container.innerHTML = "";
+
+  const approvals = state.approvals;
+  const pending = approvals.filter((a) => !a.expired);
+  const expired = approvals.filter((a) => a.expired);
+
+  if (pending.length === 0 && expired.length === 0) {
+    container.style.display = "none";
+    return;
+  }
+  container.style.display = "block";
+
+  const heading = document.createElement("div");
+  heading.className = "mc-panel-header";
+  heading.innerHTML = `
+    <div>
+      <div class="mc-panel-title">Pending Approvals</div>
+      <div class="mc-panel-desc">Review agent actions before they run.</div>
+    </div>
+  `;
+  container.appendChild(heading);
+
+  for (const approval of pending) {
+    container.appendChild(renderApprovalCard(approval, container));
+  }
+  for (const approval of expired) {
+    container.appendChild(renderExpiredApprovalCard(approval, container));
+  }
+
+  scheduleApprovalTimers();
+}
+
+function renderApprovalCard(approval: PendingApproval, container: HTMLElement): HTMLDivElement {
+  const card = document.createElement("div");
+  card.className = "mc-approval-card";
+  card.dataset.correlationId = approval.correlationId;
+
+  const toolLine = approval.toolName
+    ? `<div class="mc-approval-tool">Tool: ${escapeHtml(approval.toolName)}</div>`
+    : "";
+  const argsLine = approval.arguments && Object.keys(approval.arguments).length > 0
+    ? `<pre class="mc-approval-args">${escapeHtml(JSON.stringify(approval.arguments, null, 2))}</pre>`
+    : "";
+
+  const remainingMs = approval.timeoutAt
+    ? Math.max(0, new Date(approval.timeoutAt).getTime() - Date.now())
+    : 5 * 60 * 1000;
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  const mins = Math.floor(remainingSec / 60);
+  const secs = remainingSec % 60;
+
+  card.innerHTML = `
+    <div class="mc-approval-header">
+      <span class="mc-approval-title">${escapeHtml(approval.title)}</span>
+      <span class="mc-approval-priority ${approval.priority}">${approval.priority}</span>
+    </div>
+    <div class="mc-approval-summary">${escapeHtml(approval.summary)}</div>
+    ${toolLine}
+    ${argsLine}
+    <div class="mc-approval-meta">
+      <span class="mc-approval-kind">${approval.kind}</span>
+      <span class="mc-approval-timeout">Expires in ${mins}:${String(secs).padStart(2, "0")}</span>
+    </div>
+    <div class="mc-approval-actions">
+      <button class="mc-btn mc-btn-primary" data-action="approve">Approve</button>
+      <button class="mc-btn mc-btn-secondary" data-action="reject">Reject</button>
+    </div>
+  `;
+
+  card.querySelector('[data-action="approve"]')?.addEventListener("click", async () => {
+    try {
+      await window.carbonAPI.invoke({
+        type: "session/approve",
+        sessionId: approval.sessionId,
+        correlationId: approval.correlationId,
+      });
+      state.approvals = state.approvals.filter((a) => a.correlationId !== approval.correlationId);
+      renderApprovals(container);
+    } catch (error: unknown) {
+      Toast.show(`Approve failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  });
+
+  card.querySelector('[data-action="reject"]')?.addEventListener("click", async () => {
+    const reason = window.prompt("Reject reason (optional):") ?? undefined;
+    try {
+      await window.carbonAPI.invoke({
+        type: "session/reject",
+        sessionId: approval.sessionId,
+        correlationId: approval.correlationId,
+        reason,
+      });
+      state.approvals = state.approvals.filter((a) => a.correlationId !== approval.correlationId);
+      renderApprovals(container);
+    } catch (error: unknown) {
+      Toast.show(`Reject failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  });
+
+  return card;
+}
+
+function renderExpiredApprovalCard(approval: PendingApproval, _container: HTMLElement): HTMLDivElement {
+  const card = document.createElement("div");
+  card.className = "mc-approval-card expired";
+  card.innerHTML = `
+    <div class="mc-approval-header">
+      <span class="mc-approval-title">${escapeHtml(approval.title)}</span>
+      <span class="mc-approval-status expired">Expired</span>
+    </div>
+    <div class="mc-approval-summary">${escapeHtml(approval.summary)}</div>
+    <div class="mc-approval-meta">
+      <span>This approval request timed out and was automatically rejected.</span>
+    </div>
+  `;
+  return card;
+}
+
+function scheduleApprovalTimers(): void {
+  for (const approval of state.approvals) {
+    if (approval.expired || !approval.timeoutAt) continue;
+    const remaining = new Date(approval.timeoutAt).getTime() - Date.now();
+    if (remaining <= 0) {
+      approval.expired = true;
+      continue;
+    }
+    const timer = setTimeout(() => {
+      const existing = state.approvals.find((a) => a.correlationId === approval.correlationId);
+      if (existing && !existing.expired) {
+        existing.expired = true;
+        // Re-fetch from main to make sure we are in sync
+        void window.carbonAPI.invoke({ type: "session/approvals", sessionId: existing.sessionId })
+          .then((resp: unknown) => {
+            if (resp && typeof resp === "object" && (resp as { type: string }).type === "session/approvals.success") {
+              const found = ((resp as { approvals?: PendingApproval[] }).approvals ?? [])
+                .find((a) => a.correlationId === approval.correlationId);
+              if (!found) {
+                state.approvals = state.approvals.filter((a) => a.correlationId !== approval.correlationId);
+              }
+            }
+            const panel = document.getElementById("mc-approvals-panel");
+            if (panel) renderApprovals(panel);
+          });
+      }
+    }, Math.min(remaining, 2147483647));
+    approvalTimers.push(timer);
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

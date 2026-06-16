@@ -17,6 +17,7 @@ import { CachingProvider } from "./cache/caching-provider.js";
 import type { ResponseCache, SemanticCache } from "./cache/index.js";
 import type { PermissionResolver } from "./security/tool-guard.js";
 import { permitTool } from "./security/tool-guard.js";
+import { ApprovalCoordinator } from "./harness/approval-coordinator.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -213,6 +214,10 @@ export interface AgentRunConfig {
   };
   /** Optional permission resolver; if provided, tools are gated before execution. */
   permissionResolver?: PermissionResolver;
+  /** Optional approval coordinator for human-in-the-loop confirmations. */
+  approvalCoordinator?: ApprovalCoordinator;
+  /** Supervision mode for the run; "confirm" pauses before each tool execution. */
+  supervisionMode?: "watch" | "confirm";
 }
 
 export interface AgentStep {
@@ -391,6 +396,29 @@ Always cite your sources when answering from retrieved documents.`;
           output: null,
           error: "Permission denied",
           permissionDenied: true,
+        };
+      }
+    }
+
+    // Human-in-the-loop confirmation in "confirm" mode.
+    if (this.config.approvalCoordinator && (this.config.supervisionMode ?? "watch") === "confirm") {
+      const decision = await this.config.approvalCoordinator.requestApproval(
+        this.config.workspaceId,
+        "tool",
+        `Tool call: ${name}`,
+        toolDef?.description ?? `${name} requires approval`,
+        {
+          priority: "high",
+          toolName: name,
+          arguments: input,
+        },
+      );
+      if (decision.decision !== "approved") {
+        return {
+          success: false,
+          output: null,
+          error: `Approval ${decision.decision}: ${decision.reason ?? ""}`,
+          approvalDenied: true,
         };
       }
     }

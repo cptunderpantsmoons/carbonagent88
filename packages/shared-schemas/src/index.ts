@@ -538,6 +538,38 @@ export const SessionWorkingSetSchema = z.object({
 export type SessionWorkingSet = z.infer<typeof SessionWorkingSetSchema>;
 
 // ---------------------------------------------------------------------------
+// Human-in-the-Loop Approval
+// ---------------------------------------------------------------------------
+
+export const ApprovalKindSchema = z.enum(["tool", "plan", "plan-step"]);
+
+export const ApprovalPrioritySchema = z.enum(["low", "medium", "high"]);
+
+export const ApprovalDecisionSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  reason: z.string().optional(),
+});
+
+export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
+
+export const ApprovalRequestSchema = z.object({
+  correlationId: UuidSchema,
+  sessionId: UuidSchema,
+  kind: ApprovalKindSchema,
+  priority: ApprovalPrioritySchema,
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  toolName: z.string().optional(),
+  arguments: z.record(z.unknown()).optional(),
+  requestedAt: TimestampSchema,
+  timeoutAt: TimestampSchema.optional(),
+});
+
+export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+
+export const SessionApprovalRequestSchema = ApprovalRequestSchema;
+
+// ---------------------------------------------------------------------------
 // Graph Memory
 // ---------------------------------------------------------------------------
 
@@ -771,6 +803,24 @@ export const SessionWorkingSetRequestSchema = z.object({
   id: UuidSchema,
 });
 
+export const SessionApproveRequestSchema = z.object({
+  type: z.literal("session/approve"),
+  sessionId: UuidSchema,
+  correlationId: UuidSchema,
+});
+
+export const SessionRejectRequestSchema = z.object({
+  type: z.literal("session/reject"),
+  sessionId: UuidSchema,
+  correlationId: UuidSchema,
+  reason: z.string().optional(),
+});
+
+export const SessionApprovalsRequestSchema = z.object({
+  type: z.literal("session/approvals"),
+  sessionId: UuidSchema,
+});
+
 export const StrictIpcRequestSchema = z.discriminatedUnion("type", [
   // Auth
   LoginRequestSchema,
@@ -832,6 +882,10 @@ export const StrictIpcRequestSchema = z.discriminatedUnion("type", [
   SessionGetRequestSchema,
   SessionEventsRequestSchema,
   SessionWorkingSetRequestSchema,
+  // Approvals
+  SessionApproveRequestSchema,
+  SessionRejectRequestSchema,
+  SessionApprovalsRequestSchema,
   // Ingestion
   z.object({ type: z.literal("ingestion/scan"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("ingestion/retry"), jobId: UuidSchema }),
@@ -1024,6 +1078,21 @@ export const SessionWorkingSetSuccessSchema = z.object({
   data: SessionWorkingSetSchema,
 });
 
+export const SessionApproveSuccessSchema = z.object({
+  type: z.literal("session/approve.success"),
+  approved: z.boolean(),
+});
+
+export const SessionRejectSuccessSchema = z.object({
+  type: z.literal("session/reject.success"),
+  rejected: z.boolean(),
+});
+
+export const SessionApprovalsSuccessSchema = z.object({
+  type: z.literal("session/approvals.success"),
+  approvals: z.array(ApprovalRequestSchema),
+});
+
 export const IpcResponseSchema = z.discriminatedUnion("type", [
   // Success wrappers
   z.object({ type: z.literal("provider/list.success"), data: z.array(AIProviderPublicSchema) }),
@@ -1059,6 +1128,10 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   SessionStartSuccessSchema,
   SessionEventsSuccessSchema,
   SessionWorkingSetSuccessSchema,
+  // Approval responses
+  SessionApproveSuccessSchema,
+  SessionRejectSuccessSchema,
+  SessionApprovalsSuccessSchema,
   z.object({ type: z.literal("ingestion/scan.success"), jobs: z.array(IngestionJobSchema) }),
   z.object({ type: z.literal("ingestion/retry.success"), data: IngestionJobSchema }),
   z.object({ type: z.literal("vault/list.success"), files: z.array(z.string()) }),

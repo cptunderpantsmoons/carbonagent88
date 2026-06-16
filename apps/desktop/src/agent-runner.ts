@@ -12,6 +12,7 @@ import {
   OrchestrationRuntime,
   type ToolExecutor,
   type PermissionResolver,
+  type ApprovalCoordinator,
 } from "@carbon-agent/core-runtime";
 import type { LLMProvider } from "@carbon-agent/core-runtime";
 import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole, listUserPermissions } from "@carbon-agent/local-store";
@@ -48,6 +49,7 @@ export interface RunAgentInput {
     mailbox: string;
   };
   supervisionMode?: "watch" | "confirm";
+  approvalCoordinator?: ApprovalCoordinator;
 }
 
 export interface RunAgentResult {
@@ -543,6 +545,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       maxRounds: maxSteps,
       harnessRegistry,
       permissionResolver,
+      approvalCoordinator: input.approvalCoordinator,
       executor: {
         stealth_open: executor.stealth_open,
         stealth_scrape: executor.stealth_scrape,

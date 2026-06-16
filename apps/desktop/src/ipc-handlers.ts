@@ -49,6 +49,7 @@ import { runAgent } from "./agent-runner.js";
 import { WatcherManager } from "./watcher-manager.js";
 import { emitVaultChange, startProfileTelemetry, stopProfileTelemetry } from "./desktop-events.js";
 import { emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
+import { createApprovalCoordinator, getApprovalCoordinator, loadPendingApprovalsFromDb } from "./approval-coordinator.js";
 import { recordGeneratedDocument } from "./document-records.js";
 import { detectAllClis, detectCli } from "./cli-subagent.js";
 
@@ -62,6 +63,8 @@ async function ensureDb(): Promise<CarbonDatabase> {
     _db = new CarbonDatabase();
     await _db.ensureDefaultTenantAndAdmin();
     setAuthDb(_db);
+    createApprovalCoordinator(_db as unknown as Parameters<typeof createApprovalCoordinator>[0]);
+    await loadPendingApprovalsFromDb(_db);
   }
   return _db;
 }
@@ -265,6 +268,12 @@ function actionPermission(req: { type: string; workspaceId?: string }): Permissi
     case "session/get":
     case "session/events":
     case "session/working-set":
+      return "workspace:read";
+    // Approvals
+    case "session/approve":
+    case "session/reject":
+      return "run:create";
+    case "session/approvals":
       return "workspace:read";
     // Connectors
     case "connector/list":
@@ -1156,6 +1165,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
             maxSteps: 50,
             runId: request.id,
             session,
+            approvalCoordinator: getApprovalCoordinator(),
             onRuntime: (runtime) => {
               activeRuns.set(request.id, runtime);
             },
@@ -1198,6 +1208,21 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         const row = await d.getSessionWorkingSet(request.id);
         return { type: "session/working-set.success", data: mapWorkingSetRow(request.id, row as Record<string, unknown> | undefined) };
       }
+
+      // ==================== Approvals ====================
+      case "session/approve": {
+        const approved = getApprovalCoordinator().approve(request.correlationId);
+        return { type: "session/approve.success", approved };
+      }
+      case "session/reject": {
+        const rejected = getApprovalCoordinator().reject(request.correlationId, request.reason);
+        return { type: "session/reject.success", rejected };
+      }
+      case "session/approvals": {
+        const pending = getApprovalCoordinator().listPending(request.sessionId);
+        return { type: "session/approvals.success", approvals: pending };
+      }
+
       case "session/start": {
         const row = await d.getOrchestrationSession(request.id);
         if (!row) return { type: "error", error: "Session not found", code: "SESSION_NOT_FOUND" };
@@ -1220,6 +1245,7 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
             sessionGoal: String(row.current_goal),
             sessionRoot: root,
             supervisionMode: String(row.supervision_mode) as "watch" | "confirm",
+            approvalCoordinator: getApprovalCoordinator(),
             onRuntime: (runtime) => {
               activeRuns.set(runId, runtime);
             },

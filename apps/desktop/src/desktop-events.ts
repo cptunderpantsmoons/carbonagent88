@@ -1,4 +1,4 @@
-import type { BrowserWindow } from "electron";
+import { Notification, type BrowserWindow } from "electron";
 import { getLockedContext } from "@carbon-agent/cloak-bridge";
 
 export interface DesktopAXTreeNode {
@@ -144,6 +144,45 @@ export interface AnomalyDetectedPayload {
 
 export function emitAnomalyDetected(payload: AnomalyDetectedPayload): void {
   send("carbon-event:anomaly-detected", payload);
+}
+
+export interface ApprovalRequestedPayload {
+  correlationId: string;
+  sessionId: string;
+  kind: "tool" | "plan" | "plan-step";
+  priority: "low" | "medium" | "high";
+  title: string;
+  summary: string;
+  toolName?: string;
+  arguments?: Record<string, unknown>;
+  requestedAt: string;
+  timeoutAt?: string;
+}
+
+export interface ApprovalResolvedPayload {
+  request: ApprovalRequestedPayload;
+  decision: { decision: "approved" | "rejected"; reason?: string };
+}
+
+export function emitApprovalRequested(payload: ApprovalRequestedPayload): void {
+  send("carbon-event:approval-requested", payload);
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused()) {
+    try {
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: "Carbon Agent — approval requested",
+          body: payload.title,
+        });
+        notification.show();
+      }
+    } catch {
+      // Ignore transient notification failures.
+    }
+  }
+}
+
+export function emitApprovalResolved(payload: ApprovalResolvedPayload): void {
+  send("carbon-event:approval-resolved", payload);
 }
 
 export async function startProfileTelemetry(profileId: string): Promise<void> {
