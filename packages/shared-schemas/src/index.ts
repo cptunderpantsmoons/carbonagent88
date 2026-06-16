@@ -348,6 +348,9 @@ export const ToolCallSchema = z.object({
     "ingest_file",
     "rag_retrieve",
     "write_note",
+    "delegate_task",
+    "memory_recall",
+    "memory_store",
   ]),
   input: z.record(z.unknown()),
   output: z.record(z.unknown()).nullable(),
@@ -749,3 +752,82 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
 ]);
 
 export type IpcResponse = z.infer<typeof IpcResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Enterprise Harness Schemas (re-export)
+// ---------------------------------------------------------------------------
+
+export {
+  AgentRoleSchema,
+  AgentDefinitionSchema,
+  AgentStateSchema,
+  AgentStatusSchema,
+  ToolCategorySchema,
+  EnterpriseToolSchema,
+  ToolExecutionResultSchema,
+  AgentTaskSchema,
+  AgentTaskResultSchema,
+  HarnessExecutionPlanSchema,
+  HarnessExecutionResultSchema,
+  StreamEventTypeSchema,
+  StreamEventSchema,
+  ProgressTrackerSchema,
+  FallbackStrategyTypeSchema,
+  ErrorRecoveryPolicySchema,
+  CheckpointSchema,
+  FileContextSchema,
+  DependencyInfoSchema,
+  GitInfoSchema,
+  DocumentInfoSchema,
+  ContextMemorySchema,
+  WorkspaceContextSchema,
+  MCPServerConfigSchema,
+  MCPToolSchema,
+  HarnessRequestSchema,
+  HarnessResponseSchema,
+} from "./enterprise-harness-schemas.js";
+
+export type {
+  AgentRole as EnterpriseAgentRole,
+  AgentDefinition as EnterpriseAgentDefinition,
+  AgentState as EnterpriseAgentState,
+  EnterpriseTool as EnterpriseToolType,
+  AgentTask as EnterpriseAgentTask,
+  AgentTaskResult as EnterpriseAgentTaskResult,
+  HarnessExecutionPlan as EnterpriseHarnessExecutionPlan,
+  HarnessExecutionResult as EnterpriseHarnessExecutionResult,
+  StreamEvent as EnterpriseStreamEvent,
+  ProgressTracker as EnterpriseProgressTracker,
+  ErrorRecoveryPolicy as EnterpriseErrorRecoveryPolicy,
+  Checkpoint as EnterpriseCheckpoint,
+  WorkspaceContext as EnterpriseWorkspaceContext,
+  MCPServerConfig as EnterpriseMCPServerConfig,
+  MCPTool as EnterpriseMCPTool,
+  HarnessRequest as EnterpriseHarnessRequest,
+  HarnessResponse as EnterpriseHarnessResponse,
+} from "./enterprise-harness-schemas.js";
+
+export type {
+  AgentRole,
+  AgentDefinition,
+  AgentState,
+  AgentTask,
+  AgentTaskResult,
+  HarnessExecutionPlan,
+  HarnessExecutionResult,
+  StreamEvent,
+  StreamEventType,
+  ProgressTracker,
+  ErrorRecoveryPolicy,
+  Checkpoint,
+  WorkspaceContext,
+  FileContext,
+  DependencyInfo,
+  GitInfo,
+  DocumentInfo,
+  ContextMemory,
+  EnterpriseTool,
+  ToolExecutionResult,
+  MCPServerConfig,
+  MCPTool,
+} from "./enterprise-harness-schemas.js";

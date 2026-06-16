@@ -6,10 +6,15 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc --project tsconfig.json",
+    "build:assets": "bash build.sh",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "dev": "electron .",
     "test": "vitest run",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win --x64",
+    "dist:win:portable": "electron-builder --win portable --x64",
+    "dist:linux": "electron-builder --linux --x64",
+    "dist:mac": "electron-builder --mac"
   },
   "dependencies": {
     "@carbon-agent/cloak-bridge": "workspace:*",
@@ -23,16 +28,16 @@
     "electron-updater": "^6.6.4"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^25.9.1",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.2",
-    "sharp": "^0.34.5",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "build": {
     "appId": "com.corporatecarbon.carbon-agent",
     "productName": "Carbon Agent",
+    "copyright": "Copyright © 2026 Corporate Carbon",
     "directories": {
       "output": "release"
     },
@@ -46,28 +51,58 @@
     "asarUnpack": [
       "node_modules/sql.js/dist/*.wasm"
     ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/"
+      }
+    ],
     "win": {
-      "target": "nsis",
-      "icon": "assets/icon.ico"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}",
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "shortcutName": "Carbon Agent",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "license": "LICENSE.txt"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-win-portable.${ext}"
     },
     "mac": {
       "target": "dmg",
-      "icon": "assets/icon.icns"
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.productivity"
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "assets/icon.png"
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Office"
     },
-    "publish": {
-      "provider": "github",
-      "owner": "your-org",
-      "repo": "carbon-agent"
-    }
+    "publish": null
   }
 }

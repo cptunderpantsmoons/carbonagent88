@@ -2,7 +2,7 @@
  * Agent Runner — Shared execution logic for both IPC and watcher triggers.
  */
 
-import { AgentRuntime, type ToolExecutor, createProvider, HarnessRegistry, OrchestrationRuntime, BrowserHarness, CodeHarness, LocalHarness } from "@carbon-agent/core-runtime";
+import { AgentRuntime, createProvider, BrowserHarness, CodeHarness, LocalHarness, HarnessRegistry, OrchestrationRuntime, type ToolExecutor } from "@carbon-agent/core-runtime";
 import type { LLMProvider } from "@carbon-agent/core-runtime";
 import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole } from "@carbon-agent/local-store";
 import type { ModelRoleName } from "@carbon-agent/local-store";

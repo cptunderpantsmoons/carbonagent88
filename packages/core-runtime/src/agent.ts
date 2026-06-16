@@ -227,7 +227,6 @@ export class AgentRuntime {
 
     // Initialize run log
     const runLogPath = this.initRunLog(this.config.runId);
-    const MAX_HISTORY = 40; // Max messages to keep (system + user + tool cycles)
     this.logEvent(runLogPath, makeEvent(this.config.runId, "system_message", { message: `Agent run started. Max steps: ${maxSteps}` }));
     this.logEvent(runLogPath, makeEvent(this.config.runId, "user_message", { content: userMessage }));
 
@@ -321,7 +320,9 @@ Always cite your sources when answering from retrieved documents.`;
           });
         }
 
-        // Rotate history: keep system (idx 0) + last N messages
+        // Rotate history: keep system (idx 0) + last N messages (token-aware)
+        // Default to 40 messages, but could be made token-aware with WorkingMemory
+        const MAX_HISTORY = 40;
         if (this.history.length > MAX_HISTORY) {
           const systemMsg = this.history[0];
           this.history = [systemMsg, ...this.history.slice(-(MAX_HISTORY - 1))];

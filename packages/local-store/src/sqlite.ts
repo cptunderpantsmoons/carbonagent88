@@ -197,7 +197,7 @@ function initTables(): void {
     );
     CREATE TABLE IF NOT EXISTS tool_calls (
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-      tool_name TEXT NOT NULL CHECK(tool_name IN ('stealth_open','stealth_scrape','stealth_download','ingest_file','rag_retrieve','write_note')),
+      tool_name TEXT NOT NULL CHECK(tool_name IN ('stealth_open','stealth_scrape','stealth_download','ingest_file','rag_retrieve','write_note','delegate_task','memory_recall','memory_store')),
       input TEXT NOT NULL, output TEXT, error TEXT,
       started_at TEXT NOT NULL, completed_at TEXT
     );
@@ -225,9 +225,196 @@ function initTables(): void {
       UNIQUE(workspace_id, harness_id)
     );
     CREATE INDEX IF NOT EXISTS idx_harness_configs_workspace ON harness_configs(workspace_id);
+
+    -- Episodic memory (temporal events)
+    CREATE TABLE IF NOT EXISTS episodic_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('conversation', 'task', 'tool_use', 'decision', 'error')),
+      summary TEXT NOT NULL,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      outcome TEXT NOT NULL CHECK(outcome IN ('success', 'failure', 'partial')),
+      embedding_json TEXT NOT NULL,
+      importance REAL NOT NULL DEFAULT 0.5,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      decay_factor REAL NOT NULL DEFAULT 1.0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_accessed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_episodic_workspace ON episodic_events(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_episodic_type ON episodic_events(type);
+    CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_events(importance DESC);
+
+    -- Graph nodes (entities)
+    CREATE TABLE IF NOT EXISTS memory_graph_nodes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      properties_json TEXT NOT NULL DEFAULT '{}',
+      embedding_json TEXT NOT NULL,
+      mention_count INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(workspace_id, name, entity_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_graph_nodes_workspace ON memory_graph_nodes(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON memory_graph_nodes(entity_type);
+
+    -- Graph edges (relationships)
+    CREATE TABLE IF NOT EXISTS memory_graph_edges (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      source_id TEXT NOT NULL REFERENCES memory_graph_nodes(id) ON DELETE CASCADE,
+      target_id TEXT NOT NULL REFERENCES memory_graph_nodes(id) ON DELETE CASCADE,
+      relation_type TEXT NOT NULL,
+      weight REAL NOT NULL DEFAULT 0.5,
+      properties_json TEXT NOT NULL DEFAULT '{}',
+      document_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON memory_graph_edges(source_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON memory_graph_edges(target_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_edges_workspace ON memory_graph_edges(workspace_id);
+
+    -- BM25 inverted index
+    CREATE TABLE IF NOT EXISTS bm25_index (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      memory_type TEXT NOT NULL,
+      term TEXT NOT NULL,
+      term_frequency REAL NOT NULL,
+      document_frequency INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_bm25_term ON bm25_index(term);
+    CREATE INDEX IF NOT EXISTS idx_bm25_workspace ON bm25_index(workspace_id);
+
+    -- Memory consolidation log
+    CREATE TABLE IF NOT EXISTS memory_consolidation_log (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      consolidated_count INTEGER NOT NULL,
+      compressed_count INTEGER NOT NULL,
+      forgotten_count INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Prompt cache
+    CREATE TABLE IF NOT EXISTS prompt_cache (
+      id TEXT PRIMARY KEY,
+      prompt_hash TEXT NOT NULL UNIQUE,
+      prompt_embedding_json TEXT NOT NULL,
+      prompt_normalized TEXT NOT NULL,
+      response TEXT NOT NULL,
+      model TEXT NOT NULL,
+      token_count INTEGER NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_hit_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT,
+      ttl_ms INTEGER NOT NULL DEFAULT 3600000
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompt_cache_hash ON prompt_cache(prompt_hash);
+
+    -- Response cache
+    CREATE TABLE IF NOT EXISTS response_cache (
+      id TEXT PRIMARY KEY,
+      prompt_hash TEXT NOT NULL,
+      model TEXT NOT NULL,
+      response TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_hit_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_response_cache_hash ON response_cache(prompt_hash, model);
+
+    -- Cache metrics
+    CREATE TABLE IF NOT EXISTS cache_metrics (
+      id TEXT PRIMARY KEY,
+      cache_type TEXT NOT NULL,
+      requests INTEGER NOT NULL DEFAULT 0,
+      hits INTEGER NOT NULL DEFAULT 0,
+      misses INTEGER NOT NULL DEFAULT 0,
+      tokens_saved INTEGER NOT NULL DEFAULT 0,
+      cost_saved_usd REAL NOT NULL DEFAULT 0,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Skill variants
+    CREATE TABLE IF NOT EXISTS skill_variants (
+      id TEXT PRIMARY KEY,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      parameters_json TEXT NOT NULL DEFAULT '{}',
+      tool_sequence_json TEXT NOT NULL,
+      trigger_pattern TEXT NOT NULL,
+      success_rate REAL NOT NULL DEFAULT 0,
+      execution_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      UNIQUE(skill_id, version)
+    );
+
+    -- Skill outcomes
+    CREATE TABLE IF NOT EXISTS skill_outcomes (
+      id TEXT PRIMARY KEY,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      variant_id TEXT,
+      workspace_id TEXT NOT NULL,
+      success INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      error_type TEXT,
+      context_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_skill_outcomes_skill ON skill_outcomes(skill_id);
+    CREATE INDEX IF NOT EXISTS idx_skill_outcomes_workspace ON skill_outcomes(workspace_id);
+
+    -- Skill compositions
+    CREATE TABLE IF NOT EXISTS skill_compositions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      steps_json TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Skill versions
+    CREATE TABLE IF NOT EXISTS skill_versions (
+      id TEXT PRIMARY KEY,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      changelog TEXT NOT NULL,
+      parent_version INTEGER,
+      created_by TEXT NOT NULL DEFAULT 'system',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(skill_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id);
+
+    -- Bandit state
+    CREATE TABLE IF NOT EXISTS skill_bandit_state (
+      skill_id TEXT PRIMARY KEY REFERENCES skills(id) ON DELETE CASCADE,
+      variant_id TEXT,
+      alpha REAL NOT NULL DEFAULT 1.0,
+      beta REAL NOT NULL DEFAULT 1.0,
+      total_pulls INTEGER NOT NULL DEFAULT 0,
+      last_pull_at TEXT
+    );
   `);
   ensureBrowserProfileColumns();
   ensureWatcherColumns();
+  ensureMemoryColumns();
 }
 
 function ensureBrowserProfileColumns(): void {
@@ -252,6 +439,13 @@ function ensureWatcherColumns(): void {
   if (!names.has("profile_id")) {
     dbInstance.exec("ALTER TABLE watchers ADD COLUMN profile_id TEXT REFERENCES browser_profiles(id)");
   }
+}
+
+function ensureMemoryColumns(): void {
+  if (!dbInstance) return;
+  // This function is called after initTables to ensure all new tables exist
+  // The tables are created with IF NOT EXISTS, so this is safe for existing databases
+  // Additional column migrations can be added here if needed
 }
 
 /** Initialize database engine, load/create file, and create tables. Accepts optional path override for testing. */
@@ -426,31 +620,45 @@ export class CarbonDatabase {
     return p.id;
   }
 
-  async updateProvider(id: string, p: { type?: "anthropic" | "openai" | "custom-openai"; name?: string; apiKey?: string; baseUrl?: string; model?: string }) {
+  async updateProvider(
+    id: string | { id: string; type?: "anthropic" | "openai" | "custom-openai"; name?: string; apiKey?: string; baseUrl?: string; model?: string },
+    p?: { type?: "anthropic" | "openai" | "custom-openai"; name?: string; apiKey?: string; baseUrl?: string; model?: string },
+  ) {
+    let targetId: string;
+    let update: { type?: "anthropic" | "openai" | "custom-openai"; name?: string; apiKey?: string; baseUrl?: string; model?: string } | undefined;
+    if (typeof id === "object") {
+      const { id: i, ...rest } = id;
+      targetId = i;
+      update = rest;
+    } else {
+      targetId = id;
+      update = p;
+    }
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    if (p.type !== undefined) {
+    if (!update) return;
+    if (update.type !== undefined) {
       fields.push("type = ?");
-      vals.push(p.type);
+      vals.push(update.type);
     }
-    if (p.name !== undefined) {
+    if (update.name !== undefined) {
       fields.push("name = ?");
-      vals.push(p.name);
+      vals.push(update.name);
     }
-    if (p.apiKey !== undefined) {
+    if (update.apiKey !== undefined) {
       fields.push("api_key = ?");
-      vals.push(encrypt(p.apiKey));
+      vals.push(encrypt(update.apiKey));
     }
-    if (p.baseUrl !== undefined) {
+    if (update.baseUrl !== undefined) {
       fields.push("base_url = ?");
-      vals.push(p.baseUrl);
+      vals.push(update.baseUrl);
     }
-    if (p.model !== undefined) {
+    if (update.model !== undefined) {
       fields.push("model = ?");
-      vals.push(p.model);
+      vals.push(update.model);
     }
-    vals.push(id);
+    vals.push(targetId);
     runStmt(db, `UPDATE ai_providers SET ${fields.join(", ")} WHERE id = ?`, vals);
   }
 
@@ -497,8 +705,18 @@ export class CarbonDatabase {
   }
 
   async updateProfile(
-    id: string,
-    p: {
+    id: string | ({
+      id: string;
+      name?: string;
+      description?: string;
+      profileDir?: string;
+      targetDomains?: string[];
+      status?: string;
+      lastCheckedAt?: string | null;
+      cdpUrl?: string | null;
+      cdpFingerprint?: string | null;
+    }),
+    p?: {
       name?: string;
       description?: string;
       profileDir?: string;
@@ -509,42 +727,62 @@ export class CarbonDatabase {
       cdpFingerprint?: string | null;
     },
   ) {
+    let targetId: string;
+    let update: {
+      name?: string;
+      description?: string;
+      profileDir?: string;
+      targetDomains?: string[];
+      status?: string;
+      lastCheckedAt?: string | null;
+      cdpUrl?: string | null;
+      cdpFingerprint?: string | null;
+    } | undefined;
+    if (typeof id === "object") {
+      const { id: i, ...rest } = id;
+      targetId = i;
+      update = rest;
+    } else {
+      targetId = id;
+      update = p;
+    }
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    if (p.name !== undefined) {
+    if (!update) return;
+    if (update.name !== undefined) {
       fields.push("name = ?");
-      vals.push(p.name);
+      vals.push(update.name);
     }
-    if (p.description !== undefined) {
+    if (update.description !== undefined) {
       fields.push("description = ?");
-      vals.push(p.description);
+      vals.push(update.description);
     }
-    if (p.profileDir !== undefined) {
+    if (update.profileDir !== undefined) {
       fields.push("profile_dir = ?");
-      vals.push(p.profileDir);
+      vals.push(update.profileDir);
     }
-    if (p.targetDomains !== undefined) {
+    if (update.targetDomains !== undefined) {
       fields.push("target_domains = ?");
-      vals.push(JSON.stringify(p.targetDomains));
+      vals.push(JSON.stringify(update.targetDomains));
     }
-    if (p.status !== undefined) {
+    if (update.status !== undefined) {
       fields.push("status = ?");
-      vals.push(p.status);
+      vals.push(update.status);
     }
-    if (p.lastCheckedAt !== undefined) {
+    if (update.lastCheckedAt !== undefined) {
       fields.push("last_checked_at = ?");
-      vals.push(p.lastCheckedAt);
+      vals.push(update.lastCheckedAt);
     }
-    if (p.cdpUrl !== undefined) {
+    if (update.cdpUrl !== undefined) {
       fields.push("cdp_url = ?");
-      vals.push(p.cdpUrl);
+      vals.push(update.cdpUrl);
     }
-    if (p.cdpFingerprint !== undefined) {
+    if (update.cdpFingerprint !== undefined) {
       fields.push("cdp_fingerprint = ?");
-      vals.push(p.cdpFingerprint);
+      vals.push(update.cdpFingerprint);
     }
-    vals.push(id);
+    vals.push(targetId);
     runStmt(db, `UPDATE browser_profiles SET ${fields.join(", ")} WHERE id = ?`, vals);
   }
 
@@ -657,9 +895,6 @@ export class CarbonDatabase {
     id: string,
     p: {
       name?: string;
-      path?: string;
-      recursive?: boolean;
-      cron?: string;
       cronExpression?: string;
       enabled?: boolean;
       profileId?: string | null;
@@ -671,18 +906,6 @@ export class CarbonDatabase {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
-    if (p.path !== undefined) {
-      fields.push("path = ?");
-      vals.push(p.path);
-    }
-    if (p.recursive !== undefined) {
-      fields.push("recursive = ?");
-      vals.push(p.recursive ? 1 : 0);
-    }
-    if (p.cron !== undefined) {
-      fields.push("cron = ?");
-      vals.push(p.cron);
-    }
     if (p.cronExpression !== undefined) {
       fields.push("cron_expression = ?");
       vals.push(p.cronExpression);
@@ -700,7 +923,7 @@ export class CarbonDatabase {
       vals.push(p.prompt);
     }
     if (p.lastRunAt !== undefined) {
-      fields.push("last_run = ?");
+      fields.push("last_run_at = ?");
       vals.push(p.lastRunAt);
     }
     if (p.lastRunStatus !== undefined) {
@@ -883,7 +1106,15 @@ export class CarbonDatabase {
   // ==================== DOCUMENTS ====================
   async listDocuments(workspaceId: string) {
     const db = await ensureDb();
-    return getRows(db, "SELECT * FROM documents WHERE workspace_id = ? ORDER BY created_at DESC", [workspaceId]);
+    return getRows(
+      db,
+      `SELECT d.*, ds.path AS file_path
+       FROM documents d
+       JOIN data_sources ds ON d.data_source_id = ds.id
+       WHERE d.workspace_id = ?
+       ORDER BY d.created_at DESC`,
+      [workspaceId],
+    );
   }
 
   // ==================== SKILLS ====================
@@ -1073,6 +1304,135 @@ export class CarbonDatabase {
   // ==================== PROVIDER HELPERS ====================
   async getProviderWithKey(id: string) {
     return this.getProvider(id);
+  }
+
+  // ==================== ORCHESTRATION SESSIONS ====================
+  async createOrchestrationSession(p: {
+    id: string;
+    workspaceId: string;
+    conversationId: string;
+    runId: string;
+    rootKind: string;
+    rootJson: string;
+    supervisionMode: string;
+    status: string;
+    currentGoal: string;
+    completionSummary?: string | null;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO orchestration_sessions
+        (id, workspace_id, conversation_id, run_id, root_kind, root_json,
+         supervision_mode, status, current_goal, completion_summary, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+      [
+        p.id,
+        p.workspaceId,
+        p.conversationId,
+        p.runId,
+        p.rootKind,
+        p.rootJson,
+        p.supervisionMode,
+        p.status,
+        p.currentGoal,
+        p.completionSummary ?? null,
+      ],
+    );
+  }
+
+  async getOrchestrationSession(id: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM orchestration_sessions WHERE id = ?", [id]);
+  }
+
+  async updateOrchestrationSessionStatus(id: string, status: string, completionSummary?: string | null) {
+    const db = await ensureDb();
+    const fields: string[] = ["status = ?", "updated_at = datetime('now')"];
+    const vals: unknown[] = [status];
+    if (completionSummary !== undefined) {
+      fields.push("completion_summary = ?");
+      vals.push(completionSummary);
+    }
+    vals.push(id);
+    runStmt(db, `UPDATE orchestration_sessions SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async appendSessionEvent(p: {
+    id: string;
+    sessionId: string;
+    role: string;
+    kind: string;
+    summary: string;
+    payloadJson: string;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO orchestration_session_events
+        (id, session_id, role, kind, summary, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [p.id, p.sessionId, p.role, p.kind, p.summary, p.payloadJson],
+    );
+  }
+
+  async listSessionEvents(sessionId: string) {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      "SELECT * FROM orchestration_session_events WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+      [sessionId],
+    );
+  }
+
+  async saveSessionWorkingSet(p: {
+    sessionId: string;
+    entitiesJson: string;
+    documentsJson: string;
+    metricsJson: string;
+    gapsJson: string;
+    provenanceScore: number;
+  }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO orchestration_working_sets
+        (session_id, entities_json, documents_json, metrics_json, gaps_json, provenance_score, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(session_id) DO UPDATE SET
+         entities_json = excluded.entities_json,
+         documents_json = excluded.documents_json,
+         metrics_json = excluded.metrics_json,
+         gaps_json = excluded.gaps_json,
+         provenance_score = excluded.provenance_score,
+         updated_at = datetime('now')`,
+      [p.sessionId, p.entitiesJson, p.documentsJson, p.metricsJson, p.gapsJson, p.provenanceScore],
+    );
+  }
+
+  async getSessionWorkingSet(sessionId: string) {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM orchestration_working_sets WHERE session_id = ?", [sessionId]);
+  }
+
+  // ==================== TOOL CALLS ====================
+  async addToolCall(p: { id: string; runId: string; toolName: string; input: string }) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO tool_calls (id, run_id, tool_name, input, started_at, completed_at)
+       VALUES (?, ?, ?, ?, datetime('now'), NULL)`,
+      [p.id, p.runId, p.toolName, p.input],
+    );
+  }
+
+  async completeToolCall(id: string, output: string) {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "UPDATE tool_calls SET output = ?, completed_at = datetime('now') WHERE id = ?",
+      [output, id],
+    );
   }
 }
 export { encrypt, decrypt } from "./crypto.js";

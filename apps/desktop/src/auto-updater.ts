@@ -15,7 +15,12 @@ interface _UpdateInfo {
 
 /** Initialize auto-updater after app is ready. Call once from main process. */
 export async function initAutoUpdater(): Promise<void> {
+  // Disable auto-updater for offline/local installs
   if (process.env.NODE_ENV === "development") return;
+  if (process.env.CARBON_AGENT_OFFLINE === "1") {
+    console.log("[updater] Auto-updater disabled (offline mode)");
+    return;
+  }
 
   try {
     // Dynamic import — if electron-updater is not installed, this fails gracefully
