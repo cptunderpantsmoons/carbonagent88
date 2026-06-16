@@ -436,6 +436,9 @@ function getDocumentsDir(): string {
   return path.join(os.homedir(), ".carbon-agent", "documents");
 }
 
+export * from "./graph-extractor.js";
+export { runIngestionPipeline, IngestionPipeline, type MemoryAdapter, type PipelineDocument, type PipelineResult } from "./pipeline.js";
+
 export function scanDocumentsDir(): DetectedFile[] {
   const docsDir = getDocumentsDir();
   if (!fs.existsSync(docsDir)) return [];

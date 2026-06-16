@@ -207,7 +207,10 @@ function initTables(): void {
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       name TEXT NOT NULL DEFAULT '',
-      cron_expression TEXT NOT NULL,
+      trigger TEXT NOT NULL DEFAULT 'cron' CHECK(trigger IN ('cron', 'filesystem')),
+      cron_expression TEXT NOT NULL DEFAULT '',
+      watch_path TEXT,
+      recursive INTEGER NOT NULL DEFAULT 1,
       prompt TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       profile_id TEXT REFERENCES browser_profiles(id),
@@ -245,6 +248,8 @@ function initTables(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_episodic_workspace ON episodic_events(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_episodic_type ON episodic_events(type);
+    CREATE INDEX IF NOT EXISTS idx_episodic_outcome ON episodic_events(outcome);
+    CREATE INDEX IF NOT EXISTS idx_episodic_created_at ON episodic_events(created_at);
     CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_events(importance DESC);
 
     -- Graph nodes (entities)
@@ -442,6 +447,15 @@ function ensureWatcherColumns(): void {
   }
   if (!names.has("profile_id")) {
     dbInstance.exec("ALTER TABLE watchers ADD COLUMN profile_id TEXT REFERENCES browser_profiles(id)");
+  }
+  if (!names.has("trigger")) {
+    dbInstance.exec("ALTER TABLE watchers ADD COLUMN trigger TEXT NOT NULL DEFAULT 'cron' CHECK(trigger IN ('cron', 'filesystem'))");
+  }
+  if (!names.has("watch_path")) {
+    dbInstance.exec("ALTER TABLE watchers ADD COLUMN watch_path TEXT");
+  }
+  if (!names.has("recursive")) {
+    dbInstance.exec("ALTER TABLE watchers ADD COLUMN recursive INTEGER NOT NULL DEFAULT 1");
   }
 }
 
@@ -868,15 +882,31 @@ export class CarbonDatabase {
     workspaceId: string;
     profileId?: string | null;
     name: string;
-    cronExpression: string;
+    trigger?: "cron" | "filesystem";
+    cronExpression?: string;
+    watchPath?: string | null;
+    recursive?: boolean;
     prompt: string;
     enabled: boolean;
   }) {
     const db = await ensureDb();
     runStmt(
       db,
-      "INSERT INTO watchers (id, workspace_id, profile_id, name, cron_expression, prompt, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-      [p.id, p.workspaceId, p.profileId ?? null, p.name, p.cronExpression, p.prompt, p.enabled ? 1 : 0],
+      `INSERT INTO watchers
+       (id, workspace_id, profile_id, name, trigger, cron_expression, watch_path, recursive, prompt, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+      [
+        p.id,
+        p.workspaceId,
+        p.profileId ?? null,
+        p.name,
+        p.trigger ?? "cron",
+        p.cronExpression ?? "",
+        p.watchPath ?? null,
+        p.recursive !== false ? 1 : 0,
+        p.prompt,
+        p.enabled ? 1 : 0,
+      ],
     );
     return p.id;
   }
@@ -899,7 +929,10 @@ export class CarbonDatabase {
     id: string,
     p: {
       name?: string;
+      trigger?: "cron" | "filesystem";
       cronExpression?: string;
+      watchPath?: string | null;
+      recursive?: boolean;
       enabled?: boolean;
       profileId?: string | null;
       prompt?: string;
@@ -910,9 +943,21 @@ export class CarbonDatabase {
     const db = await ensureDb();
     const fields: string[] = ["updated_at = datetime('now')"];
     const vals: unknown[] = [];
+    if (p.trigger !== undefined) {
+      fields.push("trigger = ?");
+      vals.push(p.trigger);
+    }
     if (p.cronExpression !== undefined) {
       fields.push("cron_expression = ?");
       vals.push(p.cronExpression);
+    }
+    if (p.watchPath !== undefined) {
+      fields.push("watch_path = ?");
+      vals.push(p.watchPath ?? null);
+    }
+    if (p.recursive !== undefined) {
+      fields.push("recursive = ?");
+      vals.push(p.recursive ? 1 : 0);
     }
     if (p.enabled !== undefined) {
       fields.push("enabled = ?");
@@ -1623,6 +1668,106 @@ export class CarbonDatabase {
   async listGraphEdges(workspaceId: string): Promise<Record<string, unknown>[]> {
     const db = await ensureDb();
     return getRows(db, "SELECT * FROM memory_graph_edges WHERE workspace_id = ? ORDER BY weight DESC", [workspaceId]);
+  }
+
+  // ==================== EPISODIC MEMORY ====================
+  async storeEpisodicEvent(event: {
+    id: string;
+    workspaceId: string;
+    type: string;
+    summary: string;
+    details?: Record<string, unknown>;
+    outcome: string;
+    embedding?: number[];
+    importance?: number;
+    createdAt?: string;
+    decayFactor?: number;
+    accessCount?: number;
+  }): Promise<void> {
+    const db = await ensureDb();
+    const createdAt = event.createdAt ?? new Date().toISOString();
+    runStmt(
+      db,
+      `INSERT OR REPLACE INTO episodic_events
+       (id, workspace_id, type, summary, details_json, outcome, embedding_json, importance,
+        access_count, decay_factor, created_at, last_accessed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        event.id,
+        event.workspaceId,
+        event.type,
+        event.summary,
+        JSON.stringify(event.details ?? {}),
+        event.outcome,
+        JSON.stringify(event.embedding ?? []),
+        event.importance ?? 0.5,
+        event.accessCount ?? 0,
+        event.decayFactor ?? 1.0,
+        createdAt,
+        createdAt,
+      ],
+    );
+  }
+
+  async findEpisodicEvents(opts: {
+    workspaceId: string;
+    types?: string | string[];
+    outcome?: string;
+    after?: string;
+    before?: string;
+    limit?: number;
+    includeEmbeddings?: boolean;
+  }): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    const conditions: string[] = ["workspace_id = ?"];
+    const params: unknown[] = [opts.workspaceId];
+
+    if (opts.types !== undefined) {
+      const types = Array.isArray(opts.types) ? opts.types : [opts.types];
+      if (types.length > 0) {
+        conditions.push(`type IN (${types.map(() => "?").join(", ")})`);
+        params.push(...types);
+      }
+    }
+    if (opts.outcome !== undefined) {
+      conditions.push("outcome = ?");
+      params.push(opts.outcome);
+    }
+    if (opts.after !== undefined) {
+      conditions.push("created_at > ?");
+      params.push(opts.after);
+    }
+    if (opts.before !== undefined) {
+      conditions.push("created_at < ?");
+      params.push(opts.before);
+    }
+
+    const includeEmbeddings = opts.includeEmbeddings !== false;
+    const fields = includeEmbeddings
+      ? "*"
+      : "id, workspace_id, type, summary, details_json, outcome, importance, access_count, decay_factor, created_at, last_accessed_at";
+    let sql = `SELECT ${fields} FROM episodic_events WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC`;
+    if (opts.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(opts.limit);
+    }
+    return getRows(db, sql, params);
+  }
+
+  async deleteEpisodicEvents(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const db = await ensureDb();
+    const placeholders = ids.map(() => "?").join(", ");
+    runStmt(db, `DELETE FROM episodic_events WHERE id IN (${placeholders})`, ids);
+  }
+
+  async deleteEpisodicEventsByRange(workspaceId: string, before: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "DELETE FROM episodic_events WHERE workspace_id = ? AND created_at < ?",
+      [workspaceId, before],
+    );
   }
 }
 export { encrypt, decrypt } from "./crypto.js";

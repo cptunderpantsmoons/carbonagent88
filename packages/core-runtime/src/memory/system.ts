@@ -12,7 +12,7 @@
 import { EventEmitter } from "node:events";
 import { WorkingMemory, createWorkingMemory } from "./working.js";
 import { SemanticMemory, type SemanticMemoryEntry, type SemanticMemoryResult, vectorSimilarity } from "./semantic.js";
-import { EpisodicMemory, type EpisodicEvent, type EpisodicEventType, type EpisodicOutcome } from "./episodic.js";
+import { EpisodicMemory, type EpisodicEvent, type EpisodicEventType, type EpisodicOutcome, type EpisodicPersistence } from "./episodic.js";
 import { MemoryConsolidation, type ConsolidationConfig, type ConsolidationResult } from "./consolidation.js";
 import { GraphMemory, type GraphNode, type GraphEdge, type GraphStats, type GraphPersistence } from "./graph.js";
 import { estimateTokens } from "./token-counter.js";
@@ -32,6 +32,7 @@ export interface MemorySystemConfig {
   episodic: {
     maxEvents: number;
     decayRate: number;
+    persistence?: EpisodicPersistence;
   };
   graph: {
     persistence?: GraphPersistence;
@@ -115,6 +116,7 @@ export class AgenticMemorySystem extends EventEmitter {
       episodic: {
         maxEvents: config.episodic?.maxEvents ?? 10000,
         decayRate: config.episodic?.decayRate ?? 0.01,
+        persistence: config.episodic?.persistence,
       },
       graph: {
         persistence: config.graph?.persistence,
@@ -139,6 +141,7 @@ export class AgenticMemorySystem extends EventEmitter {
     this.episodicMemory = new EpisodicMemory({
       maxEvents: this.config.episodic.maxEvents,
       decayRate: this.config.episodic.decayRate,
+      persistence: this.config.episodic.persistence,
     });
     this.graphMemory = new GraphMemory({
       persistence: this.config.graph.persistence,
@@ -275,6 +278,7 @@ export class AgenticMemorySystem extends EventEmitter {
     after?: string;
     before?: string;
     limit?: number;
+    usePersistence?: boolean;
   } = {}) {
     return this.episodicMemory.query({
       workspaceId: this.config.workspaceId,
@@ -283,6 +287,7 @@ export class AgenticMemorySystem extends EventEmitter {
       after: options.after,
       before: options.before,
       limit: options.limit ?? 10,
+      usePersistence: options.usePersistence ?? true,
     });
   }
 
@@ -432,6 +437,7 @@ export class AgenticMemorySystem extends EventEmitter {
         this.config.workspaceId,
         limit,
         vectorSimilarity,
+        true,
       );
       results.episodic = episodicResults;
     }
@@ -501,6 +507,7 @@ export class AgenticMemorySystem extends EventEmitter {
       this.config.workspaceId,
       5,
       vectorSimilarity,
+      true,
     );
 
     for (const result of episodicResults) {
@@ -649,6 +656,9 @@ export class AgenticMemorySystem extends EventEmitter {
     // Hydrate graph memory from persistence
     await this.graphMemory.init(this.config.workspaceId);
 
+    // Hydrate episodic memory from persistence
+    await this.episodicMemory.loadForWorkspace(this.config.workspaceId);
+
     // Start consolidation if enabled
     if (this.config.consolidation.enabled) {
       this.startConsolidation();
@@ -774,6 +784,8 @@ export class AgenticMemorySystem extends EventEmitter {
     }
     if (data.episodicMemory) {
       this.episodicMemory.importData(data.episodicMemory);
+      // Ensure imported events are persisted if a persistence delegate exists.
+      this.episodicMemory.saveForWorkspace(this.config.workspaceId).catch(() => {});
     }
     if (data.graphMemory) {
       this.graphMemory.importData(data.graphMemory);

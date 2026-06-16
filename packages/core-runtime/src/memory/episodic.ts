@@ -33,6 +33,15 @@ export interface EpisodicEvent {
   lastAccessedAt: string;
 }
 
+export interface EpisodicPersistence {
+  load(workspaceId: string): Promise<EpisodicEvent[]>;
+  save(workspaceId: string, events: EpisodicEvent[]): Promise<void>;
+  store?(event: EpisodicEvent): Promise<void>;
+  deleteEvents(ids: string[]): Promise<void>;
+  deleteEventsByRange(workspaceId: string, before: string): Promise<void>;
+  flush?(): Promise<void>;
+}
+
 export interface EpisodicQuery {
   workspaceId: string;
   type?: EpisodicEventType;
@@ -40,6 +49,7 @@ export interface EpisodicQuery {
   after?: string;
   before?: string;
   limit: number;
+  usePersistence?: boolean;
 }
 
 export interface EpisodicResult {
@@ -65,11 +75,14 @@ export class EpisodicMemory extends EventEmitter {
   private typeIndexes: Map<string, Set<string>> = new Map();
   private decayRate: number;
   private maxEvents: number;
+  private persistence?: EpisodicPersistence;
+  private loadedWorkspaces: Set<string> = new Set();
 
-  constructor(config: { decayRate?: number; maxEvents?: number } = {}) {
+  constructor(config: { decayRate?: number; maxEvents?: number; persistence?: EpisodicPersistence } = {}) {
     super();
     this.decayRate = config.decayRate ?? 0.01;
     this.maxEvents = config.maxEvents ?? 10000;
+    this.persistence = config.persistence;
   }
 
   // ---------------------------------------------------------------------------
@@ -97,6 +110,13 @@ export class EpisodicMemory extends EventEmitter {
       this.evictOldest(fullEvent.workspaceId);
     }
 
+    // Persist event if a persistence delegate is configured.
+    if (this.persistence?.store) {
+      this.persistence.store(fullEvent).catch((err: unknown) => {
+        this.emit("persistence_error", { event: fullEvent, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
     this.emit("recorded", { event: fullEvent });
     return fullEvent;
   }
@@ -122,8 +142,53 @@ export class EpisodicMemory extends EventEmitter {
     this.events.delete(id);
     this.removeFromIndex(event);
 
+    if (this.persistence) {
+      this.persistence.deleteEvents([id]).catch((err: unknown) => {
+        this.emit("persistence_error", { id, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
     this.emit("deleted", { id });
     return true;
+  }
+
+  /**
+   * Load persisted events for a workspace into memory.
+   */
+  async loadForWorkspace(workspaceId: string): Promise<void> {
+    if (!this.persistence || this.loadedWorkspaces.has(workspaceId)) return;
+    const events = await this.persistence.load(workspaceId);
+    for (const event of events) {
+      if (!this.events.has(event.id)) {
+        this.events.set(event.id, event);
+        this.addToIndex(event);
+      }
+    }
+    this.loadedWorkspaces.add(workspaceId);
+    this.emit("loaded", { workspaceId, count: events.length });
+  }
+
+  /**
+   * Save all in-memory events for a workspace to persistence.
+   */
+  async saveForWorkspace(workspaceId: string): Promise<void> {
+    if (!this.persistence) return;
+    const ids = this.workspaceIndexes.get(workspaceId) ?? new Set();
+    const events = Array.from(ids)
+      .map((id) => this.events.get(id))
+      .filter((e): e is EpisodicEvent => e !== undefined);
+    await this.persistence.save(workspaceId, events);
+    this.emit("saved", { workspaceId, count: events.length });
+  }
+
+  /**
+   * Flush any pending persistence state.
+   */
+  async flush(): Promise<void> {
+    if (!this.persistence) return;
+    if (this.persistence.flush) {
+      await this.persistence.flush();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -135,6 +200,13 @@ export class EpisodicMemory extends EventEmitter {
    */
   query(query: EpisodicQuery): EpisodicResult[] {
     const { workspaceId, type, outcome, after, before, limit } = query;
+
+    // Hydrate from persistence if requested (default true) and not already loaded.
+    const usePersistence = query.usePersistence !== false;
+    if (usePersistence && this.persistence && !this.loadedWorkspaces.has(workspaceId)) {
+      // Synchronous callers cannot await; fire-and-forget and continue with in-memory data.
+      this.loadForWorkspace(workspaceId).catch(() => {});
+    }
 
     // Get candidate IDs from workspace index
     const candidateIds = this.workspaceIndexes.get(workspaceId) ?? new Set();
@@ -179,7 +251,12 @@ export class EpisodicMemory extends EventEmitter {
     workspaceId: string,
     limit: number,
     similarityFn?: (queryEmbedding: number[], candidates: number[][]) => number[],
+    usePersistence: boolean = true,
   ): Promise<EpisodicResult[]> {
+    if (usePersistence && this.persistence && !this.loadedWorkspaces.has(workspaceId)) {
+      await this.loadForWorkspace(workspaceId);
+    }
+
     const candidateIds = this.workspaceIndexes.get(workspaceId) ?? new Set();
     const candidates = Array.from(candidateIds)
       .map(id => this.events.get(id))

@@ -68,6 +68,10 @@ type OrchestrationDb = CarbonDatabase & {
   storeGraphEdge(p: { id: string; sourceId: string; targetId: string; relationType: string; workspaceId: string; documentId?: string | null; weight?: number; properties?: Record<string, unknown> }): Promise<void>;
   deleteGraphNode(id: string): Promise<void>;
   deleteGraphEdge(id: string): Promise<void>;
+  // Episodic memory helpers
+  storeEpisodicEvent(p: { id: string; workspaceId: string; type: string; summary: string; details?: Record<string, unknown>; outcome: string; embedding?: number[]; importance?: number; createdAt?: string }): Promise<void>;
+  findEpisodicEvents(p: { workspaceId: string; types?: string | string[]; outcome?: string; after?: string; before?: string; limit?: number; includeEmbeddings?: boolean }): Promise<Record<string, unknown>[]>;
+  deleteEpisodicEvents(ids: string[]): Promise<void>;
 };
 
 const activeRuns = new Map<string, { cancel: () => void }>();
@@ -180,13 +184,37 @@ function mapWatcherRow(row: Record<string, unknown>) {
     workspaceId: String(row.workspace_id),
     name: String(row.name ?? row.prompt ?? "Watcher"),
     prompt: String(row.prompt ?? ""),
+    trigger: String(row.trigger ?? "cron") as "cron" | "filesystem",
     cronExpression: String(row.cron_expression ?? ""),
+    watchPath: row.watch_path == null ? null : String(row.watch_path),
+    recursive: Number(row.recursive ?? 1) !== 0,
     enabled: Boolean(Number(row.enabled ?? 0)),
     profileId: row.profile_id == null ? null : String(row.profile_id),
     lastRunAt: row.last_run_at == null ? null : String(row.last_run_at),
     lastRunStatus: row.last_run_status == null ? null : String(row.last_run_status),
     createdAt: String(row.created_at ?? new Date().toISOString()),
     updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapEpisodicEventRow(row: Record<string, unknown>) {
+  let details: Record<string, unknown> = {};
+  let embedding: number[] = [];
+  try { details = JSON.parse(String(row.details_json ?? "{}")) as Record<string, unknown>; } catch { details = {}; }
+  try { embedding = JSON.parse(String(row.embedding_json ?? "[]")) as number[]; } catch { embedding = []; }
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    type: String(row.type),
+    summary: String(row.summary),
+    details,
+    outcome: String(row.outcome),
+    embedding,
+    importance: Number(row.importance ?? 0.5),
+    accessCount: Number(row.access_count ?? 0),
+    decayFactor: Number(row.decay_factor ?? 1.0),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    lastAccessedAt: String(row.last_accessed_at ?? new Date().toISOString()),
   };
 }
 
@@ -614,14 +642,34 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       case "watcher/create": {
         const id = crypto.randomUUID();
         const data = request.data;
-        await d.createWatcher({ id, workspaceId: data.workspaceId, name: data.name, cronExpression: data.cronExpression, prompt: data.prompt, enabled: data.enabled, profileId: data.profileId ?? null });
+        await d.createWatcher({
+          id,
+          workspaceId: data.workspaceId,
+          name: data.name,
+          trigger: data.trigger ?? "cron",
+          cronExpression: data.cronExpression ?? (data.trigger === "filesystem" ? "" : "*/5 * * * *"),
+          watchPath: data.watchPath ?? null,
+          recursive: data.recursive ?? true,
+          prompt: data.prompt,
+          enabled: data.enabled,
+          profileId: data.profileId ?? null,
+        });
         const created = await d.getWatcher(id);
         await getWatcherManager().sync(id);
         return { type: "watcher/create.success", data: mapWatcherRow(created as Record<string, unknown>) };
       }
       case "watcher/update": {
         const data = request.data;
-        await d.updateWatcher(request.id, { name: data.name, profileId: data.profileId, cronExpression: data.cronExpression, prompt: data.prompt, enabled: data.enabled });
+        await d.updateWatcher(request.id, {
+          name: data.name,
+          profileId: data.profileId,
+          trigger: data.trigger,
+          cronExpression: data.cronExpression,
+          watchPath: data.watchPath,
+          recursive: data.recursive,
+          prompt: data.prompt,
+          enabled: data.enabled,
+        });
         await getWatcherManager().sync(request.id);
         const updated = await d.getWatcher(request.id);
         return { type: "watcher/update.success", data: mapWatcherRow(updated as Record<string, unknown>) };
@@ -886,6 +934,41 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           relationType: request.relationType,
         });
         return { type: "graph/query.success", data: edges.map((row) => mapGraphEdgeRow(row as Record<string, unknown>)) };
+      }
+
+      // ==================== Episodic Memory ====================
+      case "memory/episodic/list": {
+        const rows = await d.findEpisodicEvents({
+          workspaceId: request.workspaceId,
+          types: request.eventType,
+          outcome: request.outcome,
+          after: request.after,
+          before: request.before,
+          limit: request.limit ?? 100,
+          includeEmbeddings: false,
+        });
+        return { type: "memory/episodic/list.success", data: rows.map((row) => mapEpisodicEventRow(row as Record<string, unknown>)) };
+      }
+      case "memory/episodic/create": {
+        const id = crypto.randomUUID();
+        await d.storeEpisodicEvent({
+          id,
+          workspaceId: request.workspaceId,
+          type: request.eventType ?? "task",
+          summary: request.summary,
+          details: request.details ?? { source: "manual" },
+          outcome: request.outcome ?? "success",
+          importance: request.importance ?? 0.5,
+          embedding: [],
+        });
+        const row = await d.findEpisodicEvents({ workspaceId: request.workspaceId, types: request.eventType ?? "task", limit: 1 });
+        const created = row.find((r) => String(r.id) === id);
+        if (!created) return { type: "error", error: "Event not saved", code: "NOT_FOUND" };
+        return { type: "memory/episodic/create.success", data: mapEpisodicEventRow(created as Record<string, unknown>) };
+      }
+      case "memory/episodic/delete": {
+        await d.deleteEpisodicEvents(request.ids);
+        return { type: "memory/episodic/delete.success" };
       }
 
       // ==================== Stats ====================

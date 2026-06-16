@@ -190,12 +190,17 @@ export type LearnedSkill = z.infer<typeof LearnedSkillSchema>;
 
 export const WatcherStatusSchema = z.enum(["success", "failed", "running", "pending"]);
 
+export const WatcherTriggerSchema = z.enum(["cron", "filesystem"]);
+
 export const WatcherSchema = z.object({
   id: UuidSchema,
   workspaceId: UuidSchema,
   name: z.string().min(1),
   prompt: z.string().min(1),
-  cronExpression: z.string().min(1),
+  trigger: WatcherTriggerSchema.default("cron"),
+  cronExpression: z.string().default(""),
+  watchPath: z.string().nullable().optional(),
+  recursive: z.boolean().default(true),
   enabled: z.boolean(),
   profileId: UuidSchema.nullable(),
   lastRunAt: TimestampSchema.nullable(),
@@ -223,6 +228,31 @@ export const AgentMemorySchema = z.object({
 });
 
 export type AgentMemory = z.infer<typeof AgentMemorySchema>;
+
+// ---------------------------------------------------------------------------
+// Episodic Memory
+// ---------------------------------------------------------------------------
+
+export const EpisodicEventTypeSchema = z.enum(["conversation", "task", "tool_use", "decision", "error"]);
+
+export const EpisodicOutcomeSchema = z.enum(["success", "failure", "partial"]);
+
+export const EpisodicEventSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  type: EpisodicEventTypeSchema,
+  summary: z.string().min(1),
+  details: z.record(z.unknown()).default({}),
+  outcome: EpisodicOutcomeSchema,
+  embedding: z.array(z.number()).default([]),
+  importance: z.number().min(0).max(1).default(0.5),
+  accessCount: z.number().int().nonnegative().default(0),
+  decayFactor: z.number().min(0).max(1).default(1),
+  createdAt: TimestampSchema,
+  lastAccessedAt: TimestampSchema,
+});
+
+export type EpisodicEvent = z.infer<typeof EpisodicEventSchema>;
 
 // ---------------------------------------------------------------------------
 // Model Roles
@@ -619,8 +649,8 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ingestion/retry"), jobId: UuidSchema }),
   // Watcher
   z.object({ type: z.literal("watcher/list") }),
-  z.object({ type: z.literal("watcher/create"), data: z.object({ workspaceId: UuidSchema, name: z.string().min(1), cronExpression: z.string().min(1), prompt: z.string().min(1), enabled: z.boolean(), profileId: UuidSchema.nullable().optional() }) }),
-  z.object({ type: z.literal("watcher/update"), id: UuidSchema, data: z.object({ workspaceId: UuidSchema, name: z.string().min(1), cronExpression: z.string().min(1), prompt: z.string().min(1), enabled: z.boolean(), profileId: UuidSchema.nullable().optional() }) }),
+  z.object({ type: z.literal("watcher/create"), data: z.object({ workspaceId: UuidSchema, name: z.string().min(1), cronExpression: z.string().min(1).optional(), watchPath: z.string().optional(), recursive: z.boolean().optional(), prompt: z.string().min(1), enabled: z.boolean(), profileId: UuidSchema.nullable().optional(), trigger: WatcherTriggerSchema.optional() }) }),
+  z.object({ type: z.literal("watcher/update"), id: UuidSchema, data: z.object({ workspaceId: UuidSchema, name: z.string().min(1), cronExpression: z.string().min(1).optional(), watchPath: z.string().optional(), recursive: z.boolean().optional(), prompt: z.string().min(1), enabled: z.boolean(), profileId: UuidSchema.nullable().optional(), trigger: WatcherTriggerSchema.optional() }) }),
   z.object({ type: z.literal("watcher/toggle"), id: UuidSchema }),
   z.object({ type: z.literal("watcher/delete"), id: UuidSchema }),
   z.object({ type: z.literal("watcher/run"), id: UuidSchema }),
@@ -659,6 +689,12 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   // Memory
   z.object({ type: z.literal("memory/list"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("memory/delete"), id: UuidSchema }),
+
+  // Episodic Memory
+  z.object({ type: z.literal("memory/episodic/list"), workspaceId: UuidSchema, eventType: EpisodicEventTypeSchema.optional(), outcome: EpisodicOutcomeSchema.optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), limit: z.number().int().positive().optional() }),
+  z.object({ type: z.literal("memory/episodic/create"), workspaceId: UuidSchema, summary: z.string().min(1), details: z.record(z.unknown()).optional(), eventType: EpisodicEventTypeSchema.optional(), outcome: EpisodicOutcomeSchema.optional(), importance: z.number().min(0).max(1).optional() }),
+  z.object({ type: z.literal("memory/episodic/delete"), ids: z.array(UuidSchema).min(1) }),
+
   // Model Roles
   z.object({ type: z.literal("model-roles/list"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("model-roles/set"), data: z.object({ role: ModelRoleNameSchema, providerId: UuidSchema, workspaceId: UuidSchema }) }),
@@ -784,6 +820,10 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   // Memory responses
   z.object({ type: z.literal("memory/list.success"), data: z.array(AgentMemorySchema) }),
   z.object({ type: z.literal("memory/delete.success") }),
+  // Episodic Memory responses
+  z.object({ type: z.literal("memory/episodic/list.success"), data: z.array(EpisodicEventSchema) }),
+  z.object({ type: z.literal("memory/episodic/create.success"), data: EpisodicEventSchema }),
+  z.object({ type: z.literal("memory/episodic/delete.success") }),
   // Model Roles responses
   z.object({ type: z.literal("model-roles/list.success"), data: z.array(ModelRoleSchema) }),
   z.object({ type: z.literal("model-roles/set.success"), data: ModelRoleSchema.nullable() }),

@@ -60,6 +60,7 @@ export {
   type EpisodicQuery,
   type EpisodicResult,
   type EpisodicStats,
+  type EpisodicPersistence,
 } from "./episodic.js";
 
 // Memory consolidation
