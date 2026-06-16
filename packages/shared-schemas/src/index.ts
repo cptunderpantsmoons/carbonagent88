@@ -628,6 +628,7 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("harness-configs/list"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("harness-configs/get"), workspaceId: UuidSchema, harnessId: z.string() }),
   z.object({ type: z.literal("harness-configs/update"), id: UuidSchema, workspaceId: UuidSchema, harnessId: z.string(), data: HarnessConfigUpdateSchema }),
+  z.object({ type: z.literal("harness-configs/test"), workspaceId: UuidSchema, harnessId: z.string() }),
 ]);
 
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
@@ -743,6 +744,7 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("harness-configs/list.success"), data: z.array(HarnessConfigSchema) }),
   z.object({ type: z.literal("harness-configs/get.success"), data: HarnessConfigSchema.nullable() }),
   z.object({ type: z.literal("harness-configs/update.success"), data: HarnessConfigSchema }),
+  z.object({ type: z.literal("harness-configs/test.success"), passed: z.boolean(), message: z.string() }),
   // Stats
   z.object({ type: z.literal("stats/list.success"), activeRuns: z.number() }),
   // Errors

@@ -212,8 +212,31 @@ export async function renderHarnesses(container: HTMLElement): Promise<void> {
 
     // Test
     const testBtn = card.querySelector(".harness-test-btn") as HTMLButtonElement;
-    testBtn.addEventListener("click", () => {
-      Toast.show(`${def.name} connection test not yet implemented.`, "info");
+    testBtn.addEventListener("click", async () => {
+      const wsId = appState.currentWorkspaceId;
+      if (!wsId) {
+        Toast.show("Select a workspace first", "warning");
+        return;
+      }
+      testBtn.textContent = "Testing...";
+      testBtn.disabled = true;
+      try {
+        const resp = (await window.carbonAPI.invoke({
+          type: "harness-configs/test",
+          workspaceId: wsId,
+          harnessId: def.id,
+        })) as { type: "harness-configs/test.success"; passed: boolean; message: string } | { type: "error"; error: string };
+        if (resp.type === "harness-configs/test.success") {
+          Toast.show(resp.message, resp.passed ? "success" : "error");
+        } else {
+          Toast.show(`Test failed: ${resp.error}`, "error");
+        }
+      } catch {
+        Toast.show(`Failed to test ${def.name} harness`, "error");
+      } finally {
+        testBtn.textContent = "Test";
+        testBtn.disabled = false;
+      }
     });
 
     // Save

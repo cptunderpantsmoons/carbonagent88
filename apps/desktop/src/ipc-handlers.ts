@@ -19,7 +19,7 @@ import { WatcherManager } from "./watcher-manager.js";
 import { emitVaultChange, startProfileTelemetry, stopProfileTelemetry } from "./desktop-events.js";
 import { emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { recordGeneratedDocument } from "./document-records.js";
-import { detectAllClis } from "./cli-subagent.js";
+import { detectAllClis, detectCli } from "./cli-subagent.js";
 
 let _db: CarbonDatabase | null = null;
 async function ensureDb(): Promise<CarbonDatabase> {
@@ -768,6 +768,21 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         });
         const row = await d.getHarnessConfig(request.workspaceId, request.harnessId);
         return { type: "harness-configs/update.success", data: mapHarnessConfigRow(row as unknown as Record<string, unknown>) };
+      }
+      case "harness-configs/test": {
+        const harnessId = request.harnessId as string;
+        if (harnessId === "claude-code" || harnessId === "codex") {
+          const cliType = harnessId === "claude-code" ? "claude-code" : "codex";
+          const result = await detectCli(cliType);
+          if (result.installed) {
+            return { type: "harness-configs/test.success", passed: true, message: `${result.cli} found${result.version ? ` (${result.version})` : ""}` };
+          }
+          return { type: "harness-configs/test.success", passed: false, message: `${result.cli} not installed. Install with: ${result.installCommand}` };
+        }
+        if (harnessId === "browser") {
+          return { type: "harness-configs/test.success", passed: true, message: "Browser harness readiness is verified when a Cloak Bridge profile is locked." };
+        }
+        return { type: "harness-configs/test.success", passed: false, message: `Connection test not available for harness ${harnessId}.` };
       }
 
       // ==================== Stats ====================
