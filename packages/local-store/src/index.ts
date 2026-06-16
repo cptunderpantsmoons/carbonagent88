@@ -6,4 +6,5 @@ export * from "./jsonl.js";
 export * from "./paths.js";
 export * from "./graph.js";
 export * from "./episodic.js";
+export * from "./rbac.js";
 export { encrypt, decrypt } from "./crypto.js";

@@ -651,6 +651,92 @@ export const ConnectorStateSchema = z.object({
 export type ConnectorState = z.infer<typeof ConnectorStateSchema>;
 
 // ---------------------------------------------------------------------------
+// Authentication / Authorization
+// ---------------------------------------------------------------------------
+
+export const TenantSchema = z.object({
+  id: UuidSchema,
+  name: z.string().min(1),
+  createdAt: TimestampSchema,
+});
+
+export type Tenant = z.infer<typeof TenantSchema>;
+
+export const UserSchema = z.object({
+  id: UuidSchema,
+  tenantId: UuidSchema,
+  email: z.string().email(),
+  name: z.string().nullable().optional(),
+  active: z.boolean(),
+  roleId: UuidSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type User = z.infer<typeof UserSchema>;
+
+export const UserRoleSchema = z.object({
+  id: UuidSchema,
+  tenantId: UuidSchema,
+  name: z.string().min(1),
+  description: z.string().nullable().optional(),
+  isSystem: z.boolean(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type UserRole = z.infer<typeof UserRoleSchema>;
+
+export const PermissionSchema = z.object({
+  id: UuidSchema,
+  name: z.string().min(1),
+  description: z.string().nullable().optional(),
+});
+
+export type Permission = z.infer<typeof PermissionSchema>;
+
+export const TenantMemberSchema = z.object({
+  tenantId: UuidSchema,
+  userId: UuidSchema,
+  roleId: UuidSchema,
+  email: z.string().email(),
+  name: z.string().nullable().optional(),
+  roleName: z.string(),
+});
+
+export type TenantMember = z.infer<typeof TenantMemberSchema>;
+
+export const WorkspaceMemberSchema = z.object({
+  workspaceId: UuidSchema,
+  userId: UuidSchema,
+  roleId: UuidSchema,
+  email: z.string().email(),
+  name: z.string().nullable().optional(),
+  roleName: z.string(),
+});
+
+export type WorkspaceMember = z.infer<typeof WorkspaceMemberSchema>;
+
+export const LoginRequestSchema = z.object({
+  type: z.literal("auth/login"),
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+
+export type LoginRequest = z.infer<typeof LoginRequestSchema>;
+
+export const SessionResponseSchema = z.object({
+  token: z.string().min(1),
+  user: UserSchema,
+});
+
+export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+export const AuthTokenFieldSchema = z.object({
+  authToken: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // IPC Contracts — Renderer → Main (requests)
 // ---------------------------------------------------------------------------
 
@@ -684,7 +770,30 @@ export const SessionWorkingSetRequestSchema = z.object({
   id: UuidSchema,
 });
 
-export const IpcRequestSchema = z.discriminatedUnion("type", [
+export const StrictIpcRequestSchema = z.discriminatedUnion("type", [
+  // Auth
+  LoginRequestSchema,
+  z.object({ type: z.literal("auth/logout") }),
+  z.object({ type: z.literal("auth/me") }),
+  // Admin users
+  z.object({ type: z.literal("admin/user/create"), data: z.object({ email: z.string().email(), name: z.string().optional(), password: z.string().min(6), roleId: UuidSchema }) }),
+  z.object({ type: z.literal("admin/user/update"), id: UuidSchema, data: z.object({ email: z.string().email().optional(), name: z.string().optional(), roleId: UuidSchema.optional(), active: z.boolean().optional() }) }),
+  z.object({ type: z.literal("admin/user/delete"), id: UuidSchema }),
+  z.object({ type: z.literal("admin/user/list") }),
+  // Admin roles
+  z.object({ type: z.literal("admin/role/create"), data: z.object({ name: z.string().min(1), description: z.string().optional(), permissionIds: z.array(UuidSchema).optional() }) }),
+  z.object({ type: z.literal("admin/role/delete"), id: UuidSchema }),
+  z.object({ type: z.literal("admin/role/list") }),
+  z.object({ type: z.literal("admin/role/assign-permission"), id: UuidSchema, permissionId: UuidSchema }),
+  z.object({ type: z.literal("admin/role/revoke-permission"), id: UuidSchema, permissionId: UuidSchema }),
+  // Admin tenants
+  z.object({ type: z.literal("admin/tenant/list") }),
+  z.object({ type: z.literal("admin/tenant/members/add"), tenantId: UuidSchema, userId: UuidSchema, roleId: UuidSchema }),
+  z.object({ type: z.literal("admin/tenant/members/remove"), tenantId: UuidSchema, userId: UuidSchema }),
+  // Workspace membership
+  z.object({ type: z.literal("workspace/members/add"), workspaceId: UuidSchema, userId: UuidSchema, roleId: UuidSchema }),
+  z.object({ type: z.literal("workspace/members/remove"), workspaceId: UuidSchema, userId: UuidSchema }),
+  z.object({ type: z.literal("workspace/members/list"), workspaceId: UuidSchema }),
   // Provider
   z.object({ type: z.literal("provider/list") }),
   z.object({ type: z.literal("provider/create"), data: AIProviderConfigSchema.omit({ id: true, createdAt: true, updatedAt: true }) }),
@@ -835,11 +944,54 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("watcher/rules/delete"), id: UuidSchema }),
 ]);
 
-export type IpcRequest = z.infer<typeof IpcRequestSchema>;
+export const IpcRequestSchema = z.preprocess(
+  (val) => {
+    if (val && typeof val === "object") {
+      const next = { ...(val as Record<string, unknown>) };
+      delete next.authToken;
+      return next;
+    }
+    return val;
+  },
+  StrictIpcRequestSchema,
+);
+
+export type StrictIpcRequest = z.infer<typeof StrictIpcRequestSchema>;
+export type IpcRequest = StrictIpcRequest & { authToken?: string };
 
 // ---------------------------------------------------------------------------
 // IPC Contracts — Main → Renderer (responses)
 // ---------------------------------------------------------------------------
+
+export const LoginSuccessSchema = z.object({
+  type: z.literal("auth/login.success"),
+  data: SessionResponseSchema,
+});
+
+export const SessionVerifySuccessSchema = z.object({
+  type: z.literal("auth/session.success"),
+  data: UserSchema,
+});
+
+export const UserListSuccessSchema = z.object({
+  type: z.literal("admin/user/list.success"),
+  data: z.array(UserSchema),
+});
+
+export const RoleListSuccessSchema = z.object({
+  type: z.literal("admin/role/list.success"),
+  data: z.array(UserRoleSchema),
+});
+
+export const TenantListSuccessSchema = z.object({
+  type: z.literal("admin/tenant/list.success"),
+  data: z.array(TenantSchema),
+});
+
+export const WorkspaceMemberListSuccessSchema = z.object({
+  type: z.literal("workspace/members/list.success"),
+  data: z.array(WorkspaceMemberSchema),
+});
 
 export const SessionCreateSuccessSchema = z.object({
   type: z.literal("session/create.success"),
@@ -974,6 +1126,25 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("graph/createEdge.success"), data: GraphEdgeSchema }),
   z.object({ type: z.literal("graph/delete.success") }),
   z.object({ type: z.literal("graph/query.success"), data: z.array(GraphEdgeSchema) }),
+  // Auth / Admin / Membership responses
+  LoginSuccessSchema,
+  SessionVerifySuccessSchema,
+  z.object({ type: z.literal("auth/logout.success") }),
+  UserListSuccessSchema,
+  z.object({ type: z.literal("admin/user/create.success"), data: UserSchema }),
+  z.object({ type: z.literal("admin/user/update.success"), data: UserSchema }),
+  z.object({ type: z.literal("admin/user/delete.success") }),
+  RoleListSuccessSchema,
+  z.object({ type: z.literal("admin/role/create.success"), data: UserRoleSchema }),
+  z.object({ type: z.literal("admin/role/delete.success") }),
+  z.object({ type: z.literal("admin/role/assign-permission.success") }),
+  z.object({ type: z.literal("admin/role/revoke-permission.success") }),
+  TenantListSuccessSchema,
+  z.object({ type: z.literal("admin/tenant/members/add.success"), data: TenantMemberSchema }),
+  z.object({ type: z.literal("admin/tenant/members/remove.success") }),
+  WorkspaceMemberListSuccessSchema,
+  z.object({ type: z.literal("workspace/members/add.success"), data: WorkspaceMemberSchema }),
+  z.object({ type: z.literal("workspace/members/remove.success") }),
   // Errors
   z.object({ type: z.literal("error"), error: z.string(), code: z.string().optional() }),
   // Events (streaming)

@@ -382,11 +382,79 @@ function initTables(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_anomaly_rules_watcher
       ON anomaly_rules(watcher_id);
+
+    -- Multi-tenancy tables (Phase 4)
+    CREATE TABLE IF NOT EXISTS tenants (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS roles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      is_system INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS permissions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      permission_id TEXT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+      PRIMARY KEY (role_id, permission_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      name TEXT,
+      password_hash TEXT,
+      role_id TEXT NOT NULL REFERENCES roles(id),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, email)
+    );
+
+    CREATE TABLE IF NOT EXISTS tenant_members (
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES roles(id),
+      PRIMARY KEY (tenant_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS workspace_members (
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES roles(id),
+      PRIMARY KEY (workspace_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_roles_tenant ON roles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_role_permissions_role ON role_permissions(role_id);
+    CREATE INDEX IF NOT EXISTS idx_tenant_members_tenant ON tenant_members(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_tenant_members_user ON tenant_members(user_id);
+    CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace ON workspace_members(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
   `);
   ensureBrowserProfileColumns();
   ensureWatcherColumns();
   ensureWatcherRulesColumn();
   ensureMemoryColumns();
+  ensureMultiTenancyColumns();
+  initDefaultPermissions();
 }
 
 function ensureBrowserProfileColumns(): void {
@@ -436,6 +504,70 @@ function ensureMemoryColumns(): void {
   // This function is called after initTables to ensure all new tables exist
   // The tables are created with IF NOT EXISTS, so this is safe for existing databases
   // Additional column migrations can be added here if needed
+}
+
+function ensureMultiTenancyColumns(): void {
+  if (!dbInstance) return;
+  const tables = [
+    "workspaces",
+    "ai_providers",
+    "browser_profiles",
+    "conversations",
+    "runs",
+    "data_sources",
+    "documents",
+    "watchers",
+    "connector_configs",
+    "harness_configs",
+    "orchestration_sessions",
+  ];
+  for (const table of tables) {
+    try {
+      const columns = getRows(dbInstance, `PRAGMA table_info(${table})`);
+      const names = new Set(columns.map((column: RowObj) => String(column.name)));
+      if (!names.has("tenant_id")) {
+        dbInstance.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT`);
+      }
+      if (!names.has("user_id")) {
+        dbInstance.exec(`ALTER TABLE ${table} ADD COLUMN user_id TEXT`);
+      }
+      if (!names.has("owner_id")) {
+        dbInstance.exec(`ALTER TABLE ${table} ADD COLUMN owner_id TEXT`);
+      }
+    } catch (err) {
+      console.warn(`[ensureMultiTenancyColumns] skipped ${table}:`, err);
+    }
+  }
+}
+
+const DEFAULT_PERMISSIONS = [
+  ["workspace:read", "View workspaces"],
+  ["workspace:write", "Create and update workspaces"],
+  ["workspace:delete", "Delete workspaces"],
+  ["memory:read", "Read memory"],
+  ["memory:write", "Write memory"],
+  ["skills:read", "Read skills"],
+  ["skills:write", "Write skills"],
+  ["skills:delete", "Delete skills"],
+  ["run:create", "Create runs"],
+  ["run:cancel", "Cancel runs"],
+  ["provider:manage", "Manage AI providers"],
+  ["profile:manage", "Manage browser profiles"],
+  ["connector:manage", "Manage connectors"],
+  ["watcher:manage", "Manage watchers"],
+  ["user:manage", "Manage users"],
+  ["role:manage", "Manage roles and permissions"],
+] as const;
+
+function initDefaultPermissions(): void {
+  if (!dbInstance) return;
+  for (const [name, description] of DEFAULT_PERMISSIONS) {
+    runStmt(
+      dbInstance,
+      "INSERT OR IGNORE INTO permissions (id, name, description) VALUES (?, ?, ?)",
+      [crypto.randomUUID(), name, description],
+    );
+  }
 }
 
 /** Initialize database engine, load/create file, and create tables. Accepts optional path override for testing. */
@@ -518,12 +650,12 @@ export class CarbonDatabase {
     return getRows(db, "SELECT * FROM workspaces ORDER BY created_at DESC");
   }
 
-  async createWorkspace(p: { id: string; name: string; description?: string; vaultDir: string }) {
+  async createWorkspace(p: { id: string; name: string; description?: string; vaultDir: string; tenantId?: string; userId?: string }) {
     const db = await ensureDb();
     runStmt(
       db,
-      "INSERT INTO workspaces (id, name, description, vault_dir, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))",
-      [p.id, p.name, p.description ?? null, p.vaultDir],
+      "INSERT INTO workspaces (id, name, description, vault_dir, tenant_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.name, p.description ?? null, p.vaultDir, p.tenantId ?? null, p.userId ?? null],
     );
     return p.id;
   }
@@ -599,13 +731,15 @@ export class CarbonDatabase {
     apiKey: string;
     baseUrl?: string;
     model: string;
+    tenantId?: string;
+    userId?: string;
   }) {
     const db = await ensureDb();
     const encryptedKey = encrypt(p.apiKey);
     runStmt(
       db,
-      "INSERT INTO ai_providers (id, type, name, api_key, base_url, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-      [p.id, p.type, p.name, encryptedKey, p.baseUrl ?? null, p.model],
+      "INSERT INTO ai_providers (id, type, name, api_key, base_url, model, tenant_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.type, p.name, encryptedKey, p.baseUrl ?? null, p.model, p.tenantId ?? null, p.userId ?? null],
     );
     return p.id;
   }
@@ -675,11 +809,13 @@ export class CarbonDatabase {
     cdpUrl?: string;
     cdpFingerprint?: string;
     targetDomains: string[];
+    tenantId?: string;
+    userId?: string;
   }) {
     const db = await ensureDb();
     runStmt(
       db,
-      "INSERT INTO browser_profiles (id, name, description, profile_dir, cdp_url, cdp_fingerprint, target_domains, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      "INSERT INTO browser_profiles (id, name, description, profile_dir, cdp_url, cdp_fingerprint, target_domains, status, tenant_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
       [
         p.id,
         p.name,
@@ -689,6 +825,8 @@ export class CarbonDatabase {
         p.cdpFingerprint ?? null,
         JSON.stringify(p.targetDomains),
         "unknown",
+        p.tenantId ?? null,
+        p.userId ?? null,
       ],
     );
     return p.id;
@@ -1962,6 +2100,373 @@ export class CarbonDatabase {
   async deleteAnomalyRule(id: string): Promise<void> {
     const db = await ensureDb();
     runStmt(db, "DELETE FROM anomaly_rules WHERE id = ?", [id]);
+  }
+
+  // ==================== MULTI-TENANCY / RBAC (Phase 4) ====================
+  async ensureDefaultTenantAndAdmin(): Promise<{ tenantId: string; adminUserId: string; adminRoleId: string }> {
+    const db = await ensureDb();
+    const DEFAULT_TENANT = "00000000-0000-0000-0000-000000000001";
+    const DEFAULT_ADMIN = "00000000-0000-0000-0000-000000000002";
+    const DEFAULT_ROLES = {
+      admin: "00000000-0000-0000-0000-000000000003",
+      member: "00000000-0000-0000-0000-000000000004",
+      viewer: "00000000-0000-0000-0000-000000000005",
+    };
+
+    const tenant = getRow(db, "SELECT * FROM tenants WHERE id = ?", [DEFAULT_TENANT]);
+    if (!tenant) {
+      runStmt(
+        db,
+        "INSERT INTO tenants (id, name, created_at) VALUES (?, ?, datetime('now'))",
+        [DEFAULT_TENANT, "Default Tenant"],
+      );
+    }
+
+    // Ensure system roles map to fixed IDs for this tenant
+    const rolePermissions: Record<string, string[]> = {
+      admin: [
+        "workspace:read", "workspace:write", "workspace:delete",
+        "memory:read", "memory:write",
+        "skills:read", "skills:write", "skills:delete",
+        "run:create", "run:cancel",
+        "provider:manage", "profile:manage", "connector:manage", "watcher:manage",
+        "user:manage", "role:manage",
+      ],
+      member: [
+        "workspace:read", "workspace:write",
+        "memory:read", "memory:write",
+        "skills:read", "skills:write",
+        "run:create", "run:cancel",
+        "provider:manage", "profile:manage", "connector:manage", "watcher:manage",
+      ],
+      viewer: [
+        "workspace:read", "memory:read", "skills:read",
+      ],
+    };
+
+    for (const [name, roleId] of Object.entries(DEFAULT_ROLES)) {
+      const existing = getRow(db, "SELECT * FROM roles WHERE id = ?", [roleId]);
+      if (!existing) {
+        runStmt(
+          db,
+          "INSERT INTO roles (id, tenant_id, name, description, is_system, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+          [roleId, DEFAULT_TENANT, name, `System ${name} role`, 1],
+        );
+      }
+      const perms = rolePermissions[name] ?? [];
+      for (const permName of perms) {
+        const perm = getRow(db, "SELECT * FROM permissions WHERE name = ?", [permName]);
+        if (!perm) continue;
+        const assigned = getRow(
+          db,
+          "SELECT * FROM role_permissions WHERE role_id = ? AND permission_id = ?",
+          [roleId, perm.id],
+        );
+        if (!assigned) {
+          runStmt(
+            db,
+            "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+            [roleId, perm.id],
+          );
+        }
+      }
+    }
+
+    const adminRoleId = DEFAULT_ROLES.admin;
+    const adminUser = getRow(db, "SELECT * FROM users WHERE id = ?", [DEFAULT_ADMIN]);
+    if (!adminUser) {
+      runStmt(
+        db,
+        "INSERT INTO users (id, tenant_id, email, name, password_hash, role_id, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+        [DEFAULT_ADMIN, DEFAULT_TENANT, "admin@local", "Default Admin", null, adminRoleId, 1],
+      );
+    }
+
+    // Ensure the default admin is a tenant member with admin role
+    const tenantMembership = getRow(
+      db,
+      "SELECT * FROM tenant_members WHERE tenant_id = ? AND user_id = ?",
+      [DEFAULT_TENANT, DEFAULT_ADMIN],
+    );
+    if (!tenantMembership) {
+      runStmt(
+        db,
+        "INSERT INTO tenant_members (tenant_id, user_id, role_id) VALUES (?, ?, ?)",
+        [DEFAULT_TENANT, DEFAULT_ADMIN, adminRoleId],
+      );
+    }
+
+    // Migrate existing rows to default tenant and admin ownership
+    const tables = [
+      "workspaces",
+      "ai_providers",
+      "browser_profiles",
+      "conversations",
+      "runs",
+      "data_sources",
+      "documents",
+      "watchers",
+      "connector_configs",
+      "harness_configs",
+      "orchestration_sessions",
+    ];
+    for (const table of tables) {
+      runStmt(
+        db,
+        `UPDATE ${table} SET tenant_id = COALESCE(tenant_id, ?), owner_id = COALESCE(owner_id, ?) WHERE tenant_id IS NULL`,
+        [DEFAULT_TENANT, DEFAULT_ADMIN],
+      );
+    }
+
+    return { tenantId: DEFAULT_TENANT, adminUserId: DEFAULT_ADMIN, adminRoleId };
+  }
+
+  async createTenant(p: { id: string; name: string }): Promise<string> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO tenants (id, name, created_at) VALUES (?, ?, datetime('now'))",
+      [p.id, p.name],
+    );
+    return p.id;
+  }
+
+  async getTenant(id: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM tenants WHERE id = ?", [id]);
+  }
+
+  async listTenants(): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM tenants ORDER BY created_at DESC");
+  }
+
+  async createUser(p: {
+    id: string;
+    tenantId: string;
+    email: string;
+    name?: string | null;
+    passwordHash?: string | null;
+    roleId: string;
+    active?: boolean;
+  }): Promise<string> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO users (id, tenant_id, email, name, password_hash, role_id, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.tenantId, p.email, p.name ?? null, p.passwordHash ?? null, p.roleId, p.active !== false ? 1 : 0],
+    );
+    return p.id;
+  }
+
+  async getUserByEmail(email: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
+  }
+
+  async getUserById(id: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM users WHERE id = ?", [id]);
+  }
+
+  async listUsersForTenant(tenantId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM users WHERE tenant_id = ? ORDER BY created_at DESC", [tenantId]);
+  }
+
+  async updateUser(
+    id: string,
+    p: {
+      email?: string;
+      name?: string | null;
+      passwordHash?: string | null;
+      roleId?: string;
+      active?: boolean;
+    },
+  ): Promise<void> {
+    const db = await ensureDb();
+    const fields: string[] = ["updated_at = datetime('now')"];
+    const vals: unknown[] = [];
+    if (p.email !== undefined) { fields.push("email = ?"); vals.push(p.email); }
+    if (p.name !== undefined) { fields.push("name = ?"); vals.push(p.name); }
+    if (p.passwordHash !== undefined) { fields.push("password_hash = ?"); vals.push(p.passwordHash); }
+    if (p.roleId !== undefined) { fields.push("role_id = ?"); vals.push(p.roleId); }
+    if (p.active !== undefined) { fields.push("active = ?"); vals.push(p.active ? 1 : 0); }
+    vals.push(id);
+    runStmt(db, `UPDATE users SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM tenant_members WHERE user_id = ?", [id]);
+    runStmt(db, "DELETE FROM workspace_members WHERE user_id = ?", [id]);
+    runStmt(db, "DELETE FROM users WHERE id = ?", [id]);
+  }
+
+  async createRole(p: {
+    id: string;
+    tenantId: string;
+    name: string;
+    description?: string | null;
+    isSystem?: boolean;
+  }): Promise<string> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT INTO roles (id, tenant_id, name, description, is_system, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+      [p.id, p.tenantId, p.name, p.description ?? null, p.isSystem ? 1 : 0],
+    );
+    return p.id;
+  }
+
+  async getRole(id: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM roles WHERE id = ?", [id]);
+  }
+
+  async getRoleByName(tenantId: string, name: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM roles WHERE tenant_id = ? AND name = ?", [tenantId, name]);
+  }
+
+  async listRoles(tenantId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM roles WHERE tenant_id = ? ORDER BY name", [tenantId]);
+  }
+
+  async deleteRole(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM workspace_members WHERE role_id = ?", [id]);
+    runStmt(db, "DELETE FROM tenant_members WHERE role_id = ?", [id]);
+    runStmt(db, "DELETE FROM role_permissions WHERE role_id = ?", [id]);
+    runStmt(db, "DELETE FROM roles WHERE id = ?", [id]);
+  }
+
+  async listPermissionsForRole(roleId: string): Promise<string[]> {
+    const db = await ensureDb();
+    const rows = getRows(
+      db,
+      `SELECT p.name FROM permissions p
+       JOIN role_permissions rp ON rp.permission_id = p.id
+       WHERE rp.role_id = ?`,
+      [roleId],
+    );
+    return rows.map((row) => String(row.name));
+  }
+
+  async getPermissionByName(name: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM permissions WHERE name = ?", [name]);
+  }
+
+  async assignPermission(roleId: string, permissionId: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+      [roleId, permissionId],
+    );
+  }
+
+  async revokePermission(roleId: string, permissionId: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", [roleId, permissionId]);
+  }
+
+  async addTenantMember(tenantId: string, userId: string, roleId: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT OR REPLACE INTO tenant_members (tenant_id, user_id, role_id) VALUES (?, ?, ?)",
+      [tenantId, userId, roleId],
+    );
+  }
+
+  async listTenantMembers(tenantId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      `SELECT tm.*, u.email, u.name, r.name as role_name
+       FROM tenant_members tm
+       JOIN users u ON u.id = tm.user_id
+       JOIN roles r ON r.id = tm.role_id
+       WHERE tm.tenant_id = ?`,
+      [tenantId],
+    );
+  }
+
+  async getTenantMemberRole(tenantId: string, userId: string): Promise<{ roleId: string } | undefined> {
+    const db = await ensureDb();
+    const row = getRow(
+      db,
+      "SELECT role_id FROM tenant_members WHERE tenant_id = ? AND user_id = ?",
+      [tenantId, userId],
+    );
+    if (!row) return undefined;
+    return { roleId: String(row.role_id) };
+  }
+
+  async addWorkspaceMember(workspaceId: string, userId: string, roleId: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      "INSERT OR REPLACE INTO workspace_members (workspace_id, user_id, role_id) VALUES (?, ?, ?)",
+      [workspaceId, userId, roleId],
+    );
+  }
+
+  async removeWorkspaceMember(workspaceId: string, userId: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?", [workspaceId, userId]);
+  }
+
+  async listWorkspaceMembers(workspaceId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      `SELECT wm.*, u.email, u.name, r.name as role_name
+       FROM workspace_members wm
+       JOIN users u ON u.id = wm.user_id
+       JOIN roles r ON r.id = wm.role_id
+       WHERE wm.workspace_id = ?`,
+      [workspaceId],
+    );
+  }
+
+  async getWorkspaceMemberRole(workspaceId: string, userId: string): Promise<{ roleId: string } | undefined> {
+    const db = await ensureDb();
+    const row = getRow(
+      db,
+      "SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+      [workspaceId, userId],
+    );
+    if (!row) return undefined;
+    return { roleId: String(row.role_id) };
+  }
+
+  async listWorkspacesForUser(userId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    const user = getRow(db, "SELECT * FROM users WHERE id = ?", [userId]);
+    if (!user) return [];
+    const tenantId = String(user.tenant_id);
+    const role = await this.getRole(String(user.role_id));
+    const isTenantAdmin = role?.name === "admin";
+    if (isTenantAdmin) {
+      return getRows(
+        db,
+        "SELECT * FROM workspaces WHERE tenant_id = ? OR tenant_id IS NULL ORDER BY created_at DESC",
+        [tenantId],
+      );
+    }
+    return getRows(
+      db,
+      `SELECT w.* FROM workspaces w
+       LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = ?
+       WHERE (w.tenant_id = ? OR w.tenant_id IS NULL)
+         AND (wm.user_id IS NOT NULL)
+       ORDER BY w.created_at DESC`,
+      [userId, tenantId],
+    );
   }
 }
 export { encrypt, decrypt } from "./crypto.js";

@@ -7,7 +7,12 @@ const mockState = vi.hoisted(() => ({
   registeredHandler: undefined as ((event: unknown, request: unknown) => Promise<unknown>) | undefined,
   sessionCancel: vi.fn(),
   resolveSessionRun: undefined as ((value: { runStatus: "completed"; fullResponse: string; runId: string }) => void) | undefined,
+  authToken: "valid-session-token",
 }));
+
+function withAuth(req: Record<string, unknown>): Record<string, unknown> {
+  return { ...req, authToken: mockState.authToken };
+}
 
 const mockDb = {
   listProviders: vi.fn(),
@@ -67,6 +72,10 @@ vi.mock("@carbon-agent/local-store", () => ({
   dbListModelRoles: vi.fn().mockResolvedValue([]),
   dbDeleteModelRole: vi.fn().mockResolvedValue(undefined),
   dbGetModelRole: vi.fn().mockResolvedValue(undefined),
+  runStmt: vi.fn(),
+  ensureDb: vi.fn(),
+  hasPermission: vi.fn().mockResolvedValue(true),
+  canAccessWorkspace: vi.fn().mockResolvedValue(true),
   CarbonDatabase: class {
     listProviders = mockDb.listProviders;
     createProvider = mockDb.createProvider;
@@ -82,7 +91,16 @@ vi.mock("@carbon-agent/local-store", () => ({
     getRun = mockDb.getRun;
     updateRunStatus = mockDb.updateRunStatus;
     updateOrchestrationSessionStatus = vi.fn().mockResolvedValue(undefined);
+    ensureDefaultTenantAndAdmin = vi.fn().mockResolvedValue({ tenantId: "t1", adminUserId: "u1", adminRoleId: "r1" });
   },
+}));
+
+vi.mock("./auth.js", () => ({
+  verifySession: vi.fn().mockResolvedValue({ userId: "u1", tenantId: "t1", roleId: "r1" }),
+  login: vi.fn(),
+  logout: vi.fn(),
+  hashPassword: vi.fn().mockResolvedValue("x"),
+  setAuthDb: vi.fn(),
 }));
 
 vi.mock("@carbon-agent/core-runtime", () => ({
@@ -152,7 +170,7 @@ describe("ipc-handlers real routes", () => {
       },
     ]);
 
-    const response = await mockState.registeredHandler?.({}, { type: "provider/list" });
+    const response = await mockState.registeredHandler?.({}, withAuth({ type: "provider/list" }));
 
     expect(response).toEqual({
       type: "provider/list.success",
@@ -179,7 +197,7 @@ describe("ipc-handlers real routes", () => {
       updated_at: "2026-06-06T00:00:00.000Z",
     });
 
-    const response = await mockState.registeredHandler?.({}, {
+    const response = await mockState.registeredHandler?.({}, withAuth({
       type: "provider/create",
       data: {
         type: "openai",
@@ -187,7 +205,7 @@ describe("ipc-handlers real routes", () => {
         apiKey: "sk-test",
         model: "gpt-4.1",
       },
-    });
+    }));
 
     expect(response).toMatchObject({
       type: "provider/create.success",
@@ -208,7 +226,7 @@ describe("ipc-handlers real routes", () => {
     fs.writeFileSync(path.join(vaultDir, "Alpha.md"), "# Alpha");
     fs.writeFileSync(path.join(vaultDir, "nested", "Beta.md"), "# Beta");
 
-    const response = await mockState.registeredHandler?.({}, { type: "vault/list", workspaceId });
+    const response = await mockState.registeredHandler?.({}, withAuth({ type: "vault/list", workspaceId }));
     expect(response).toEqual({ type: "vault/list.success", files: ["Alpha.md", "nested/Beta.md"] });
   });
 
@@ -227,7 +245,7 @@ describe("ipc-handlers real routes", () => {
       },
     ]);
 
-    const response = await mockState.registeredHandler?.({}, { type: "document/list", workspaceId });
+    const response = await mockState.registeredHandler?.({}, withAuth({ type: "document/list", workspaceId }));
     expect(response).toMatchObject({
       type: "document/list.success",
       data: expect.arrayContaining([
@@ -241,7 +259,7 @@ describe("ipc-handlers real routes", () => {
   });
 
   it("returns run events from the JSONL log", async () => {
-    const response = await mockState.registeredHandler?.({}, { type: "run/events", id: "550e8400-e29b-41d4-a716-446655440003" });
+    const response = await mockState.registeredHandler?.({}, withAuth({ type: "run/events", id: "550e8400-e29b-41d4-a716-446655440003" }));
     expect(response).toMatchObject({
       type: "run/events.success",
       events: expect.arrayContaining([
@@ -269,7 +287,7 @@ describe("ipc-handlers real routes", () => {
       },
     ]);
 
-    const response = await mockState.registeredHandler?.({}, { type: "skills/list", workspaceId });
+    const response = await mockState.registeredHandler?.({}, withAuth({ type: "skills/list", workspaceId }));
     expect(response).toMatchObject({
       type: "skills/list.success",
       data: expect.arrayContaining([
@@ -284,7 +302,7 @@ describe("ipc-handlers real routes", () => {
   });
 
   it("creates an orchestration session", async () => {
-    const response = await mockState.registeredHandler?.({}, {
+    const response = await mockState.registeredHandler?.({}, withAuth({
       type: "session/create",
       workspaceId: "550e8400-e29b-41d4-a716-446655440020",
       conversationId: "550e8400-e29b-41d4-a716-446655440021",
@@ -292,7 +310,7 @@ describe("ipc-handlers real routes", () => {
       root: { kind: "outlook-thread", threadId: "t-1", threadSubject: "Month end", mailbox: "finance@client.com" },
       supervisionMode: "watch",
       goal: "Collect and prepare reporting inputs",
-    });
+    }));
 
     expect(response).toMatchObject({
       type: "session/create.success",
@@ -304,8 +322,8 @@ describe("ipc-handlers real routes", () => {
   });
 
   it("returns working-set and event snapshots", async () => {
-    const events = await mockState.registeredHandler?.({}, { type: "session/events", id: "550e8400-e29b-41d4-a716-446655440022" });
-    const workingSet = await mockState.registeredHandler?.({}, { type: "session/working-set", id: "550e8400-e29b-41d4-a716-446655440022" });
+    const events = await mockState.registeredHandler?.({}, withAuth({ type: "session/events", id: "550e8400-e29b-41d4-a716-446655440022" }));
+    const workingSet = await mockState.registeredHandler?.({}, withAuth({ type: "session/working-set", id: "550e8400-e29b-41d4-a716-446655440022" }));
     expect(events).toMatchObject({ type: "session/events.success" });
     expect(workingSet).toMatchObject({ type: "session/working-set.success" });
   });
@@ -318,23 +336,23 @@ describe("ipc-handlers real routes", () => {
       });
     });
 
-    const startPromise = mockState.registeredHandler?.({}, {
+    const startPromise = mockState.registeredHandler?.({}, withAuth({
       type: "session/start",
       id: "550e8400-e29b-41d4-a716-446655440022",
-    });
+    }));
 
     let stats: unknown;
     for (let i = 0; i < 5; i += 1) {
       await Promise.resolve();
-      stats = await mockState.registeredHandler?.({}, { type: "stats/list" });
+      stats = await mockState.registeredHandler?.({}, withAuth({ type: "stats/list" }));
       if ((stats as { activeRuns?: number } | undefined)?.activeRuns === 1) break;
     }
     expect(stats).toMatchObject({ type: "stats/list.success", activeRuns: 1 });
 
-    await mockState.registeredHandler?.({}, {
+    await mockState.registeredHandler?.({}, withAuth({
       type: "run/cancel",
       id: "550e8400-e29b-41d4-a716-446655440023",
-    });
+    }));
 
     expect(mockState.sessionCancel).toHaveBeenCalledTimes(1);
     mockState.resolveSessionRun?.({ runStatus: "completed", fullResponse: "done", runId: "550e8400-e29b-41d4-a716-446655440023" });

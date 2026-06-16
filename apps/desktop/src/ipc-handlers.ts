@@ -10,7 +10,31 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { IpcRequestSchema } from "@carbon-agent/shared-schemas";
-import { CarbonDatabase, initDatabase, createRunLog, readRunLog, getVaultDir, initSkillsTable, initMemoryTable, initModelRolesTable, dbListMemories, dbDeleteMemory, dbExportSkills, dbImportSkills, dbSetModelRole, dbListModelRoles, dbDeleteModelRole, dbGetModelRole, type ModelRoleName } from "@carbon-agent/local-store";
+import {
+  CarbonDatabase,
+  initDatabase,
+  createRunLog,
+  readRunLog,
+  getVaultDir,
+  initSkillsTable,
+  initMemoryTable,
+  initModelRolesTable,
+  dbListMemories,
+  dbDeleteMemory,
+  dbExportSkills,
+  dbImportSkills,
+  dbSetModelRole,
+  dbListModelRoles,
+  dbDeleteModelRole,
+  dbGetModelRole,
+  hasPermission,
+  canAccessWorkspace,
+  type ModelRoleName,
+  type Permission,
+  runStmt,
+  ensureDb as ensureRawDb,
+} from "@carbon-agent/local-store";
+import { verifySession, login, logout, hashPassword, setAuthDb } from "./auth.js";
 import { createProvider } from "@carbon-agent/core-runtime";
 import { scanDocumentsDir } from "@carbon-agent/ingestion";
 import {
@@ -36,11 +60,34 @@ async function ensureDb(): Promise<CarbonDatabase> {
     await initMemoryTable();
     await initModelRolesTable();
     _db = new CarbonDatabase();
+    await _db.ensureDefaultTenantAndAdmin();
+    setAuthDb(_db);
   }
   return _db;
 }
 
 type OrchestrationDb = CarbonDatabase & {
+  ensureDefaultTenantAndAdmin(): Promise<{ tenantId: string; adminUserId: string; adminRoleId: string }>;
+  getUserById(id: string): Promise<Record<string, unknown> | undefined>;
+  getUserByEmail(email: string): Promise<Record<string, unknown> | undefined>;
+  listUsersForTenant(tenantId: string): Promise<Record<string, unknown>[]>;
+  createUser(p: { id: string; tenantId: string; email: string; name?: string | null; passwordHash?: string | null; roleId: string; active?: boolean }): Promise<string>;
+  updateUser(id: string, p: { email?: string; name?: string | null; passwordHash?: string | null; roleId?: string; active?: boolean }): Promise<void>;
+  deleteUser(id: string): Promise<void>;
+  getRole(id: string): Promise<Record<string, unknown> | undefined>;
+  getRoleByName(tenantId: string, name: string): Promise<Record<string, unknown> | undefined>;
+  listRoles(tenantId: string): Promise<Record<string, unknown>[]>;
+  createRole(p: { id: string; tenantId: string; name: string; description?: string | null; isSystem?: boolean }): Promise<string>;
+  deleteRole(id: string): Promise<void>;
+  assignPermission(roleId: string, permissionId: string): Promise<void>;
+  revokePermission(roleId: string, permissionId: string): Promise<void>;
+  listTenants(): Promise<Record<string, unknown>[]>;
+  addTenantMember(tenantId: string, userId: string, roleId: string): Promise<void>;
+  listTenantMembers(tenantId: string): Promise<Record<string, unknown>[]>;
+  addWorkspaceMember(workspaceId: string, userId: string, roleId: string): Promise<void>;
+  removeWorkspaceMember(workspaceId: string, userId: string): Promise<void>;
+  listWorkspaceMembers(workspaceId: string): Promise<Record<string, unknown>[]>;
+  listWorkspacesForUser(userId: string): Promise<Record<string, unknown>[]>;
   createOrchestrationSession(p: {
     id: string;
     workspaceId: string;
@@ -105,6 +152,225 @@ export function setWatcherManager(wm: WatcherManager): void {
 function getWatcherManager(): WatcherManager {
   if (!watcherManager) throw new Error("WatcherManager not initialized");
   return watcherManager;
+}
+
+const PUBLIC_ROUTES = new Set(["auth/login", "auth/logout", "auth/me"]);
+
+function actionPermission(req: { type: string; workspaceId?: string }): Permission | Permission[] | null {
+  switch (req.type) {
+    // Workspace
+    case "workspace/list":
+    case "workspace/get":
+      return "workspace:read";
+    case "workspace/create":
+      return "workspace:write";
+    case "workspace/members/list":
+      return "workspace:read";
+    case "workspace/members/add":
+    case "workspace/members/remove":
+      return "workspace:write";
+    // Provider / profile
+    case "provider/list":
+    case "provider/get":
+      return "provider:manage";
+    case "provider/create":
+    case "provider/update":
+    case "provider/delete":
+    case "provider/test":
+      return "provider:manage";
+    case "profile/list":
+    case "profile/get":
+      return "profile:manage";
+    case "profile/create":
+    case "profile/update":
+    case "profile/delete":
+    case "profile/health":
+    case "profile/launchLogin":
+    case "profile/lock":
+    case "profile/unlock":
+      return "profile:manage";
+    // Conversation
+    case "conversation/list":
+      return "workspace:read";
+    case "conversation/create":
+      return "memory:write";
+    case "conversation/get":
+      return "workspace:read";
+    case "conversation/delete":
+      return "memory:write";
+    // Run
+    case "run/list":
+    case "run/get":
+    case "run/events":
+      return "workspace:read";
+    case "run/create":
+      return "run:create";
+    case "run/cancel":
+      return "run:cancel";
+    case "run/stream":
+      return "run:create";
+    // Watcher
+    case "watcher/list":
+      return "workspace:read";
+    case "watcher/create":
+    case "watcher/update":
+    case "watcher/toggle":
+    case "watcher/delete":
+    case "watcher/run":
+      return "watcher:manage";
+    // Documents / skills / vault
+    case "document/list":
+    case "document/open":
+    case "document/reveal":
+    case "vault/list":
+    case "vault/read":
+      return "workspace:read";
+    case "vault/write":
+    case "document/generate":
+      return "memory:write";
+    case "skills/list":
+      return "skills:read";
+    case "skills/pin":
+    case "skills/import":
+      return "skills:write";
+    case "skills/delete":
+      return "skills:delete";
+    case "skills/export":
+      return "skills:read";
+    // Memory
+    case "memory/list":
+      return "memory:read";
+    case "memory/delete":
+      return "memory:write";
+    case "memory/episodic/list":
+      return "memory:read";
+    case "memory/episodic/create":
+      return "memory:write";
+    case "memory/episodic/delete":
+      return "memory:write";
+    // Graph
+    case "graph/list":
+    case "graph/get":
+    case "graph/query":
+      return "memory:read";
+    case "graph/createNode":
+    case "graph/createEdge":
+    case "graph/delete":
+      return "memory:write";
+    // Orchestration
+    case "session/create":
+      return "run:create";
+    case "session/start":
+      return "run:create";
+    case "session/get":
+    case "session/events":
+    case "session/working-set":
+      return "workspace:read";
+    // Connectors
+    case "connector/list":
+      return "workspace:read";
+    case "connector/create":
+    case "connector/update":
+    case "connector/delete":
+    case "connector/sync":
+    case "connector/runs":
+    case "connector/state/get":
+      return "connector:manage";
+    // Anomaly rules
+    case "watcher/rules/list":
+      return "workspace:read";
+    case "watcher/rules/create":
+    case "watcher/rules/delete":
+      return "watcher:manage";
+    // Model roles
+    case "model-roles/list":
+      return "workspace:read";
+    case "model-roles/set":
+    case "model-roles/delete":
+      return "workspace:write";
+    // Harness configs
+    case "harness-configs/list":
+    case "harness-configs/get":
+    case "harness-configs/test":
+      return "workspace:read";
+    case "harness-configs/update":
+      return "workspace:write";
+    // Admin tenant-scoped
+    case "admin/user/list":
+    case "admin/user/create":
+    case "admin/user/update":
+    case "admin/user/delete":
+      return "user:manage";
+    case "admin/role/list":
+    case "admin/role/create":
+    case "admin/role/delete":
+    case "admin/role/assign-permission":
+    case "admin/role/revoke-permission":
+      return "role:manage";
+    case "admin/tenant/list":
+      return "workspace:read";
+    case "admin/tenant/members/add":
+    case "admin/tenant/members/remove":
+      return "user:manage";
+    // Stats / CLI
+    case "stats/list":
+    case "cli/detect":
+      return "workspace:read";
+    // Viewport
+    case "viewport/start":
+    case "viewport/stop":
+      return "profile:manage";
+    // Ingestion
+    case "ingestion/scan":
+      return "workspace:read";
+    case "ingestion/retry":
+      return "memory:write";
+    default:
+      return null;
+  }
+}
+
+async function extractSession(raw: unknown): Promise<{ userId: string; tenantId: string; roleId: string } | null> {
+  const token = typeof raw === "object" && raw !== null && "authToken" in raw ? String(raw.authToken) : undefined;
+  if (!token) return null;
+  return verifySession(token);
+}
+
+async function authorizeRequest(
+  d: CarbonDatabase,
+  raw: unknown,
+  request: { type: string; workspaceId?: string },
+): Promise<{ session: { userId: string; tenantId: string; roleId: string } } | { error: string; code: string }> {
+  if (PUBLIC_ROUTES.has(request.type)) {
+    return { session: { userId: "", tenantId: "", roleId: "" } };
+  }
+  const session = await extractSession(raw);
+  if (!session) {
+    return { error: "Unauthorized", code: "UNAUTHORIZED" };
+  }
+  const required = actionPermission(request);
+  if (!required) return { session };
+  const permissions = Array.isArray(required) ? required : [required];
+  const workspaceId = request.workspaceId ? String(request.workspaceId) : undefined;
+  for (const p of permissions) {
+    if (await hasPermission(d, session.userId, p, { workspaceId, tenantId: session.tenantId })) {
+      return { session };
+    }
+  }
+  return { error: "Forbidden", code: "FORBIDDEN" };
+}
+
+async function stampOwnership(table: string, id: string, session: { userId: string; tenantId: string }): Promise<void> {
+  try {
+    const db = await ensureRawDb();
+    runStmt(
+      db,
+      `UPDATE ${table} SET tenant_id = COALESCE(tenant_id, ?), owner_id = COALESCE(owner_id, ?), user_id = COALESCE(user_id, ?) WHERE id = ?`,
+      [session.tenantId, session.userId, session.userId, id],
+    );
+  } catch (err) {
+    console.warn(`[stampOwnership] failed for ${table}:${id}`, err);
+  }
 }
 
 function toPosixRelative(baseDir: string, filePath: string): string {
@@ -257,6 +523,54 @@ function mapHarnessConfigRow(row: Record<string, unknown>) {
     extraJson,
     createdAt: String(row.created_at ?? new Date().toISOString()),
     updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapUserRow(row: Record<string, unknown> | undefined) {
+  if (!row) throw new Error("User row missing");
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    email: String(row.email),
+    name: row.name == null ? null : String(row.name),
+    active: Boolean(Number(row.active ?? 1)),
+    roleId: String(row.role_id),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapRoleRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    name: String(row.name),
+    description: row.description == null ? null : String(row.description),
+    isSystem: Boolean(Number(row.is_system ?? 0)),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapTenantMemberRow(row: Record<string, unknown>) {
+  return {
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    roleId: String(row.role_id),
+    email: String(row.email),
+    name: row.name == null ? null : String(row.name),
+    roleName: String(row.role_name),
+  };
+}
+
+function mapWorkspaceMemberRow(row: Record<string, unknown>) {
+  return {
+    workspaceId: String(row.workspace_id),
+    userId: String(row.user_id),
+    roleId: String(row.role_id),
+    email: String(row.email),
+    name: row.name == null ? null : String(row.name),
+    roleName: String(row.role_name),
   };
 }
 
@@ -438,10 +752,205 @@ async function unlockProfile(profileId: string): Promise<void> {
 
 ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
   try {
+    const raw = rawRequest as Record<string, unknown>;
     const request = IpcRequestSchema.parse(rawRequest);
     const d = (await ensureDb()) as OrchestrationDb;
 
+    const authResult = await authorizeRequest(d, raw, request);
+    if ("error" in authResult) {
+      return { type: "error", error: authResult.error, code: authResult.code };
+    }
+    const session = authResult.session;
+
+    // Capture workspace id if present on the request for access checks already done above.
+    const workspaceId = "workspaceId" in request && typeof request.workspaceId === "string" ? request.workspaceId : undefined;
+    if (workspaceId && session.userId) {
+      const ok = await canAccessWorkspace(d, session.userId, workspaceId);
+      if (!ok) {
+        return { type: "error", error: "Forbidden", code: "FORBIDDEN" };
+      }
+    }
+
     switch (request.type) {
+      // ==================== Auth ====================
+      case "auth/login": {
+        const result = await login(request.email, request.password);
+        if (!result) return { type: "error", error: "Invalid credentials", code: "AUTH_FAILED" };
+        const user = await d.getUserById(result.session.userId);
+        if (!user) return { type: "error", error: "Invalid credentials", code: "AUTH_FAILED" };
+        return {
+          type: "auth/login.success",
+          data: {
+            token: result.token,
+            user: {
+              id: String(user.id),
+              tenantId: String(user.tenant_id),
+              email: String(user.email),
+              name: user.name ? String(user.name) : null,
+              active: Boolean(Number(user.active)),
+              roleId: String(user.role_id),
+              createdAt: String(user.created_at),
+              updatedAt: String(user.updated_at),
+            },
+          },
+        };
+      }
+      case "auth/logout": {
+        const token = typeof raw.authToken === "string" ? raw.authToken : undefined;
+        if (token) await logout(token);
+        return { type: "auth/logout.success" };
+      }
+      case "auth/me": {
+        if (!session.userId) return { type: "error", error: "Unauthorized", code: "UNAUTHORIZED" };
+        const user = await d.getUserById(session.userId);
+        if (!user) return { type: "error", error: "Unauthorized", code: "UNAUTHORIZED" };
+        return {
+          type: "auth/session.success",
+          data: {
+            id: String(user.id),
+            tenantId: String(user.tenant_id),
+            email: String(user.email),
+            name: user.name ? String(user.name) : null,
+            active: Boolean(Number(user.active)),
+            roleId: String(user.role_id),
+            createdAt: String(user.created_at),
+            updatedAt: String(user.updated_at),
+          },
+        };
+      }
+
+      // ==================== Admin / Users ====================
+      case "admin/user/list": {
+        const rows = await d.listUsersForTenant(session.tenantId);
+        return {
+          type: "admin/user/list.success",
+          data: rows.map((row) => ({
+            id: String(row.id),
+            tenantId: String(row.tenant_id),
+            email: String(row.email),
+            name: row.name ? String(row.name) : null,
+            active: Boolean(Number(row.active)),
+            roleId: String(row.role_id),
+            createdAt: String(row.created_at),
+            updatedAt: String(row.updated_at),
+          })),
+        };
+      }
+      case "admin/user/create": {
+        const id = crypto.randomUUID();
+        const { email, name, password, roleId } = request.data;
+        await d.createUser({
+          id,
+          tenantId: session.tenantId,
+          email,
+          name,
+          passwordHash: await hashPassword(password),
+          roleId,
+          active: true,
+        });
+        const user = await d.getUserById(id);
+        return { type: "admin/user/create.success", data: mapUserRow(user) };
+      }
+      case "admin/user/update": {
+        await d.updateUser(request.id, {
+          email: request.data.email,
+          name: request.data.name,
+          roleId: request.data.roleId,
+          active: request.data.active,
+        });
+        const user = await d.getUserById(request.id);
+        return { type: "admin/user/update.success", data: mapUserRow(user) };
+      }
+      case "admin/user/delete": {
+        await d.deleteUser(request.id);
+        return { type: "admin/user/delete.success" };
+      }
+
+      // ==================== Admin / Roles ====================
+      case "admin/role/list": {
+        const rows = await d.listRoles(session.tenantId);
+        return {
+          type: "admin/role/list.success",
+          data: rows.map((row) => mapRoleRow(row as Record<string, unknown>)),
+        };
+      }
+      case "admin/role/create": {
+        const id = crypto.randomUUID();
+        await d.createRole({
+          id,
+          tenantId: session.tenantId,
+          name: request.data.name,
+          description: request.data.description ?? null,
+        });
+        if (request.data.permissionIds) {
+          for (const pid of request.data.permissionIds) {
+            await d.assignPermission(id, pid);
+          }
+        }
+        const role = await d.getRole(id);
+        return { type: "admin/role/create.success", data: mapRoleRow(role as Record<string, unknown>) };
+      }
+      case "admin/role/delete": {
+        await d.deleteRole(request.id);
+        return { type: "admin/role/delete.success" };
+      }
+      case "admin/role/assign-permission": {
+        await d.assignPermission(request.id, request.permissionId);
+        return { type: "admin/role/assign-permission.success" };
+      }
+      case "admin/role/revoke-permission": {
+        await d.revokePermission(request.id, request.permissionId);
+        return { type: "admin/role/revoke-permission.success" };
+      }
+
+      // ==================== Admin / Tenants ====================
+      case "admin/tenant/list": {
+        const rows = await d.listTenants();
+        return {
+          type: "admin/tenant/list.success",
+          data: rows.map((row) => ({
+            id: String(row.id),
+            name: String(row.name),
+            createdAt: String(row.created_at),
+          })),
+        };
+      }
+      case "admin/tenant/members/add": {
+        await d.addTenantMember(request.tenantId, request.userId, request.roleId);
+        const [tenantMember] = await d.listTenantMembers(request.tenantId);
+        return {
+          type: "admin/tenant/members/add.success",
+          data: tenantMember ? mapTenantMemberRow(tenantMember as Record<string, unknown>) : null,
+        };
+      }
+      case "admin/tenant/members/remove": {
+        // Removing a tenant member is equivalent to deleting the user for this local-only phase.
+        await d.deleteUser(request.userId);
+        return { type: "admin/tenant/members/remove.success" };
+      }
+
+      // ==================== Workspace Membership ====================
+      case "workspace/members/list": {
+        const rows = await d.listWorkspaceMembers(request.workspaceId);
+        return {
+          type: "workspace/members/list.success",
+          data: rows.map((row) => mapWorkspaceMemberRow(row as Record<string, unknown>)),
+        };
+      }
+      case "workspace/members/add": {
+        await d.addWorkspaceMember(request.workspaceId, request.userId, request.roleId);
+        const rows = await d.listWorkspaceMembers(request.workspaceId);
+        const member = rows.find((r) => String(r.user_id) === request.userId);
+        return {
+          type: "workspace/members/add.success",
+          data: member ? mapWorkspaceMemberRow(member as Record<string, unknown>) : null,
+        };
+      }
+      case "workspace/members/remove": {
+        await d.removeWorkspaceMember(request.workspaceId, request.userId);
+        return { type: "workspace/members/remove.success" };
+      }
+
       // ==================== Provider ====================
       case "provider/list": {
         const rows = await d.listProviders();
@@ -449,7 +958,17 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       }
       case "provider/create": {
         const id = crypto.randomUUID();
-        await d.createProvider({ id, type: request.data.type, name: request.data.name, apiKey: request.data.apiKey, baseUrl: request.data.baseUrl, model: request.data.model });
+        await d.createProvider({
+          id,
+          type: request.data.type,
+          name: request.data.name,
+          apiKey: request.data.apiKey,
+          baseUrl: request.data.baseUrl,
+          model: request.data.model,
+          tenantId: session.tenantId,
+          userId: session.userId,
+        });
+        await stampOwnership("ai_providers", id, session);
         const created = await d.getProvider(id);
         return { type: "provider/create.success", data: mapProviderRow(created as Record<string, unknown> | undefined) };
       }
@@ -486,7 +1005,10 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           cdpUrl: request.data.cdpUrl,
           cdpFingerprint: request.data.cdpFingerprint,
           targetDomains: request.data.targetDomains ?? ["*"],
+          tenantId: session.tenantId,
+          userId: session.userId,
         });
+        await stampOwnership("browser_profiles", id, session);
         const created = await d.getProfile(id);
         return { type: "profile/create.success", data: created };
       }
@@ -540,12 +1062,26 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
 
       // ==================== Workspace ====================
       case "workspace/list": {
-        const rows = await d.listWorkspaces();
+        const rows = session.userId ? await d.listWorkspacesForUser(session.userId) : await d.listWorkspaces();
         return { type: "workspace/list.success", data: rows };
       }
       case "workspace/create": {
         const id = crypto.randomUUID();
-        await d.createWorkspace({ id, name: request.data.name, description: request.data.description, vaultDir: request.data.vaultDir });
+        await d.createWorkspace({
+          id,
+          name: request.data.name,
+          description: request.data.description,
+          vaultDir: request.data.vaultDir,
+          tenantId: session.tenantId,
+          userId: session.userId,
+        });
+        if (session.userId) {
+          // Creator automatically becomes workspace admin.
+          const adminRole = await d.getRoleByName(session.tenantId, "admin");
+          if (adminRole) {
+            await d.addWorkspaceMember(id, session.userId, String(adminRole.id));
+          }
+        }
         const created = await d.getWorkspace(id);
         return { type: "workspace/create.success", data: created };
       }

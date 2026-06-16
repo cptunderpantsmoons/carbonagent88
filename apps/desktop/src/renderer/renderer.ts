@@ -14,6 +14,7 @@ import { cleanupSessionView, renderSessionView } from "./views/session-view.js";
 import { renderSkills } from "./views/skills-view.js";
 import { renderWatchers } from "./views/watchers-view.js";
 import { renderWorkspaces } from "./views/workspaces-view.js";
+import { renderLogin } from "./views/login-view.js";
 
 type ViewModule = {
   render(container: HTMLElement): void;
@@ -289,6 +290,32 @@ function initNavIcons(): void {
   });
 }
 
+export async function refreshSession(): Promise<void> {
+  const token = sessionStorage.getItem("carbonAuthToken");
+  const content = document.getElementById("content");
+  if (!token) {
+    if (content) {
+      renderLogin(content, () => void refreshSession());
+    }
+    return;
+  }
+
+  try {
+    const resp = await window.carbonAPI.invoke({ type: "auth/me", authToken: token }) as { type: string; data?: { email?: string }; error?: string };
+    if (resp.type !== "auth/session.success") {
+      sessionStorage.removeItem("carbonAuthToken");
+      if (content) renderLogin(content, () => void refreshSession());
+      return;
+    }
+  } catch {
+    sessionStorage.removeItem("carbonAuthToken");
+    if (content) renderLogin(content, () => void refreshSession());
+    return;
+  }
+
+  await hydrateTopBar();
+}
+
 async function init(): Promise<void> {
   initNavigation();
   initNavIcons();
@@ -311,6 +338,14 @@ async function init(): Promise<void> {
   registerView("watcher-analytics", { render: renderWatcherAnalytics });
 
   initStatsPolling();
+
+  const token = sessionStorage.getItem("carbonAuthToken");
+  if (!token) {
+    const content = document.getElementById("content");
+    if (content) renderLogin(content, () => void refreshSession());
+    return;
+  }
+
   setActiveView("playground");
   await hydrateTopBar();
 

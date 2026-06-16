@@ -54,3 +54,36 @@ export class SecureStorage {
 
 /** Singleton for global use in main process. */
 export const secureStorage = new SecureStorage();
+
+const SESSION_PREFIX = "sess:";
+const sessionStore = new Map<string, string>();
+
+export interface StoredSession {
+  userId: string;
+  tenantId: string;
+  roleId: string;
+}
+
+export function storeSession(token: string, session: StoredSession): void {
+  sessionStore.set(`${SESSION_PREFIX}${token}`, JSON.stringify(session));
+}
+
+export function getSession(token: string): StoredSession | null {
+  const raw = sessionStore.get(`${SESSION_PREFIX}${token}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as StoredSession;
+  } catch {
+    return null;
+  }
+}
+
+export function deleteSession(token: string): void {
+  sessionStore.delete(`${SESSION_PREFIX}${token}`);
+}
+
+export function listSessionKeys(): string[] {
+  return Array.from(sessionStore.keys())
+    .filter((k) => k.startsWith(SESSION_PREFIX))
+    .map((k) => k.slice(SESSION_PREFIX.length));
+}

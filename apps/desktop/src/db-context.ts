@@ -26,10 +26,25 @@ export async function ensureDb(): Promise<CarbonDatabase> {
     const { initSkillsTable } = await import("@carbon-agent/local-store");
     await initSkillsTable();
     db = new CarbonDatabase();
+    const { tenantId, adminUserId } = await db.ensureDefaultTenantAndAdmin();
+    setDefaultOwnership(tenantId, adminUserId);
     await seedDefaultProviders(db);
     await seedDefaultProfiles(db);
   }
   return db;
+}
+
+let defaultTenantId: string | null = null;
+let defaultOwnerId: string | null = null;
+
+export function getDefaultOwnership(): { tenantId: string; ownerId: string } {
+  if (!defaultTenantId || !defaultOwnerId) throw new Error("Default ownership not initialized");
+  return { tenantId: defaultTenantId, ownerId: defaultOwnerId };
+}
+
+function setDefaultOwnership(tenantId: string, ownerId: string): void {
+  defaultTenantId = tenantId;
+  defaultOwnerId = ownerId;
 }
 
 function getEnvApiKeys(): { openai?: string; anthropic?: string; customBaseUrl?: string; customKey?: string; customModel?: string } {
@@ -58,6 +73,7 @@ async function seedDefaultProviders(d: CarbonDatabase): Promise<void> {
   const existing = await d.listProviders();
   if (existing.length > 0) return;
 
+  const { tenantId, ownerId } = getDefaultOwnership();
   const keys = getEnvApiKeys();
   const providers: Array<{
     id: string;
@@ -66,6 +82,8 @@ async function seedDefaultProviders(d: CarbonDatabase): Promise<void> {
     apiKey: string;
     baseUrl?: string;
     model: string;
+    tenantId: string;
+    userId: string;
   }> = [];
 
   if (keys.customKey && keys.customBaseUrl && keys.customModel) {
@@ -76,6 +94,8 @@ async function seedDefaultProviders(d: CarbonDatabase): Promise<void> {
       apiKey: keys.customKey,
       baseUrl: keys.customBaseUrl,
       model: keys.customModel,
+      tenantId,
+      userId: ownerId,
     });
   }
   if (keys.openai) {
@@ -85,6 +105,8 @@ async function seedDefaultProviders(d: CarbonDatabase): Promise<void> {
       name: "OpenAI",
       apiKey: keys.openai,
       model: "gpt-4o",
+      tenantId,
+      userId: ownerId,
     });
   }
   if (keys.anthropic) {
@@ -94,6 +116,8 @@ async function seedDefaultProviders(d: CarbonDatabase): Promise<void> {
       name: "Anthropic (Claude)",
       apiKey: keys.anthropic,
       model: "claude-sonnet-4-20250514",
+      tenantId,
+      userId: ownerId,
     });
   }
 
@@ -110,6 +134,7 @@ async function seedDefaultProfiles(d: CarbonDatabase): Promise<void> {
   const existing = await d.listProfiles();
   if (existing.length > 0) return;
 
+  const { tenantId, ownerId } = getDefaultOwnership();
   const profileDir = path.join(os.homedir(), ".carbon-agent", "profiles", "default");
   await d.createProfile({
     id: crypto.randomUUID(),
@@ -117,6 +142,8 @@ async function seedDefaultProfiles(d: CarbonDatabase): Promise<void> {
     description: "Default browser profile for authenticated web sessions",
     profileDir,
     targetDomains: [],
+    tenantId,
+    userId: ownerId,
   });
 }
 

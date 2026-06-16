@@ -222,8 +222,13 @@ export function setProviderLabel(label: string): void {
   if (el) el.textContent = label;
 }
 
+function getSessionToken(): string | null {
+  return sessionStorage.getItem("carbonAuthToken");
+}
+
 export async function loadWorkspaces(): Promise<WorkspaceRecord[]> {
-  const resp = await window.carbonAPI.invoke({ type: "workspace/list" }) as WorkspaceListResponse;
+  const token = getSessionToken();
+  const resp = await window.carbonAPI.invoke({ type: "workspace/list", authToken: token ?? undefined }) as WorkspaceListResponse;
   if (resp.type === "workspace/list.success") {
     appState.workspaces = resp.data;
     if (!appState.currentWorkspaceId && appState.workspaces.length > 0) {
@@ -237,7 +242,8 @@ export async function loadWorkspaces(): Promise<WorkspaceRecord[]> {
 }
 
 export async function loadProviders(): Promise<ProviderRecord[]> {
-  const resp = await window.carbonAPI.invoke({ type: "provider/list" }) as ProviderListResponse;
+  const token = getSessionToken();
+  const resp = await window.carbonAPI.invoke({ type: "provider/list", authToken: token ?? undefined }) as ProviderListResponse;
   if (resp.type === "provider/list.success") {
     appState.providers = resp.data;
   }
