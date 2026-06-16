@@ -109,7 +109,7 @@ async function renderWorkspaceList(): Promise<void> {
   const workspaces = await loadWorkspaces();
   list.innerHTML = "";
   if (workspaces.length === 0) {
-    list.appendChild(createEmptyState("icon-workspace", "No workspaces", "Create a workspace to isolate documents and conversations."));
+    list.appendChild(createEmptyState("workspaces", "No workspaces", "Create a workspace to isolate documents and conversations."));
     return;
   }
 

@@ -106,7 +106,13 @@ body {
   font-size: var(--font-sm); font-weight: 400; color: var(--text-secondary);
   display: flex; align-items: center; gap: 10px; border-left: none; position: relative;
 }
-.nav-icon { font-size: 9px; opacity: 0.45; width: 14px; text-align: center; flex-shrink: 0; }
+.nav-icon {
+  width: 14px; height: 14px;
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  opacity: 0.45; flex-shrink: 0;
+}
+.nav-icon svg { width: 100%; height: 100%; color: currentColor; }
 .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .nav-item.active { background: var(--accent); color: var(--accent-dim); font-weight: 600; }
 .nav-item.active .nav-icon { opacity: 1; color: var(--accent-dim); }
@@ -402,19 +408,13 @@ body {
 .status-dot-danger { background: var(--color-danger); }
 .status-dot-muted { background: var(--text-muted); }
 .empty-state { text-align: center; padding: 56px 24px; color: var(--text-muted); }
-.empty-state-icon { font-size: 32px; margin-bottom: 14px; opacity: 0.24; }
-.empty-state-icon::before { content: '\25A0'; }
-.empty-state-icon.icon-playground::before { content: '\25CF'; }
-.empty-state-icon.icon-session::before    { content: '\25CB'; }
-.empty-state-icon.icon-vault::before       { content: '\25A0'; }
-.empty-state-icon.icon-skill::before        { content: '\25C7'; }
-.empty-state-icon.icon-profile::before      { content: '\25C8'; }
-.empty-state-icon.icon-workspace::before    { content: '\25A1'; }
-.empty-state-icon.icon-input::before        { content: '\25A0'; }
-.empty-state-icon.icon-output::before       { content: '\25A0'; }
-.empty-state-icon.icon-axtree::before       { content: '\229E'; }
-.empty-state-icon.icon-topology::before     { content: '\2B22'; }
-.empty-state-icon.icon-analytics::before    { content: '\25C8'; }
+.empty-state-icon {
+  width: 32px; height: 32px;
+  display: block;
+  margin: 0 auto 14px;
+  opacity: 0.24;
+}
+.empty-state-icon svg { width: 100%; height: 100%; color: currentColor; }
 .empty-state-title { font-family: var(--font-display); font-size: var(--font-md); font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
 .empty-state-text { font-size: var(--font-sm); max-width: 360px; margin: 0 auto; line-height: 1.5; }
 .chat-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -770,26 +770,13 @@ body {
   color: var(--text-secondary); transition: background 0.1s;
 }
 .cmdk-item:hover, .cmdk-item.selected { background: var(--accent); color: var(--accent-dim); }
-.cmdk-item-icon { width: 20px; text-align: center; flex-shrink: 0; font-size: var(--font-sm); line-height: 1; }
-.cmdk-item-icon.icon-empty::before           { content: '\25A0'; }
-.cmdk-item-icon.icon-playground::before      { content: '\25CF'; }
-.cmdk-item-icon.icon-session::before         { content: '\25CB'; }
-.cmdk-item-icon.icon-providers::before       { content: '\25C7'; }
-.cmdk-item-icon.icon-profile::before         { content: '\25C8'; }
-.cmdk-item-icon.icon-workspace::before       { content: '\25A1'; }
-.cmdk-item-icon.icon-ingestion::before       { content: '\25A6'; }
-.cmdk-item-icon.icon-vault::before           { content: '\25A0'; }
-.cmdk-item-icon.icon-skill::before           { content: '\25C6'; }
-.cmdk-item-icon.icon-watcher::before         { content: '\25F3'; }
-.cmdk-item-icon.icon-output::before          { content: '\25A0'; }
-.cmdk-item-icon.icon-topology::before        { content: '\2B22'; }
-.cmdk-item-icon.icon-axtree::before          { content: '\229E'; }
-.cmdk-item-icon.icon-analytics::before       { content: '\2318'; }
-.cmdk-item-icon.icon-create::before          { content: '+'; }
-.cmdk-item-icon.icon-switch::before          { content: '\21E1'; }
-.cmdk-item-icon.icon-launch::before          { content: '\25B6'; }
-.cmdk-item-icon.icon-clear::before           { content: '\00D7'; }
-.cmdk-item-icon.icon-settings::before        { content: '\25CE'; }
+.cmdk-item-icon {
+  width: 16px; height: 16px;
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.cmdk-item-icon svg { width: 100%; height: 100%; color: currentColor; }
 .cmdk-item-meta { margin-left: auto; font-size: var(--font-xs); color: var(--text-muted); font-family: var(--font-mono); }
 .axtree-toggle {
   display: inline-block; width: 16px; text-align: center;
@@ -1559,7 +1546,13 @@ textarea:focus-visible {
   background: rgba(104, 181, 248, 0.15); border-color: rgba(104, 181, 248, 0.4);
   color: #68b5f8;
 }
-.harness-chip-icon { font-size: 8px; opacity: 0.7; }
+.harness-chip-icon {
+  width: 12px; height: 12px;
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  opacity: 0.7;
+}
+.harness-chip-icon svg { width: 100%; height: 100%; color: currentColor; }
 .harness-chip.active .harness-chip-icon { opacity: 1; }
 
 .mission-suggestion-wrap { margin-top: 4px; }

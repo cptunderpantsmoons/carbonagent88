@@ -1,5 +1,6 @@
 import { renderAXTree } from "./axtree.js";
 import { clearInspector, clearChat, closeLiveViewport, loadProviders, loadWorkspaces, setProviderLabel, setWorkspaceLabel, Toast, openRunInspector } from "./view-helpers.js";
+import { icon } from "./icons.js";
 import { renderTopology } from "./topology.js";
 import { renderVault } from "./vault.js";
 import { renderWatcherAnalytics } from "./watcher-analytics.js";
@@ -22,7 +23,7 @@ type ViewModule = {
 
 type CommandPaletteItem = {
   group: string;
-  iconClass: string;
+  iconName: string;
   label: string;
   action: () => void;
   shortcut: string;
@@ -90,25 +91,25 @@ function initNavigation(): void {
 
 function getCommandPaletteItems(): CommandPaletteItem[] {
   return [
-    { group: "Navigation", iconClass: "icon-playground", label: "Go to Playground", action: () => setActiveView("playground"), shortcut: "G P" },
-    { group: "Navigation", iconClass: "icon-session", label: "Go to Sessions", action: () => setActiveView("sessions"), shortcut: "G E" },
-    { group: "Navigation", iconClass: "icon-profile", label: "Go to Harnesses", action: () => setActiveView("harnesses"), shortcut: "G H" },
-    { group: "Navigation", iconClass: "icon-providers", label: "Go to AI Providers", action: () => setActiveView("providers"), shortcut: "G A" },
-    { group: "Navigation", iconClass: "icon-profile", label: "Go to Cloak Bridge", action: () => setActiveView("profiles"), shortcut: "G C" },
-    { group: "Navigation", iconClass: "icon-workspace", label: "Go to Workspaces", action: () => setActiveView("workspaces"), shortcut: "G W" },
-    { group: "Navigation", iconClass: "icon-ingestion", label: "Go to Ingestion", action: () => setActiveView("ingestion"), shortcut: "G I" },
-    { group: "Navigation", iconClass: "icon-vault", label: "Go to Knowledge Vault", action: () => setActiveView("vault"), shortcut: "G V" },
-    { group: "Navigation", iconClass: "icon-skill", label: "Go to Learned Skills", action: () => setActiveView("skills"), shortcut: "G S" },
-    { group: "Navigation", iconClass: "icon-watcher", label: "Go to Watchers", action: () => setActiveView("watchers"), shortcut: "G T" },
-    { group: "Navigation", iconClass: "icon-output", label: "Go to Outputs", action: () => setActiveView("outputs"), shortcut: "G O" },
-    { group: "Navigation", iconClass: "icon-topology", label: "Go to Agent Topology", action: () => setActiveView("topology"), shortcut: "G Y" },
-    { group: "Navigation", iconClass: "icon-axtree", label: "Go to AXTree Inspector", action: () => setActiveView("axtree"), shortcut: "G X" },
-    { group: "Navigation", iconClass: "icon-analytics", label: "Go to Watcher Analytics", action: () => setActiveView("watcher-analytics"), shortcut: "G U" },
-    { group: "Actions", iconClass: "icon-create", label: "Create Vault Note", action: () => { setActiveView("vault"); Toast.show("Open a workspace to create a note", "info"); }, shortcut: "N N" },
-    { group: "Actions", iconClass: "icon-switch", label: "Switch Workspace", action: () => document.getElementById("workspace-selector")?.focus(), shortcut: "W W" },
-    { group: "Actions", iconClass: "icon-launch", label: "Launch Browser Profile", action: () => { setActiveView("profiles"); Toast.show("Choose a profile to launch", "info"); }, shortcut: "L L" },
-    { group: "Actions", iconClass: "icon-clear", label: "Clear Chat", action: () => { clearChat(); Toast.show("Chat cleared", "info"); }, shortcut: "K K" },
-    { group: "Actions", iconClass: "icon-settings", label: "Open Settings", action: () => { setActiveView("providers"); Toast.show("Settings opened in AI Providers tab", "info"); }, shortcut: "S S" },
+    { group: "Navigation", iconName: "playground", label: "Go to Playground", action: () => setActiveView("playground"), shortcut: "G P" },
+    { group: "Navigation", iconName: "sessions", label: "Go to Sessions", action: () => setActiveView("sessions"), shortcut: "G E" },
+    { group: "Navigation", iconName: "harnesses", label: "Go to Harnesses", action: () => setActiveView("harnesses"), shortcut: "G H" },
+    { group: "Navigation", iconName: "providers", label: "Go to AI Providers", action: () => setActiveView("providers"), shortcut: "G A" },
+    { group: "Navigation", iconName: "profiles", label: "Go to Cloak Bridge", action: () => setActiveView("profiles"), shortcut: "G C" },
+    { group: "Navigation", iconName: "workspaces", label: "Go to Workspaces", action: () => setActiveView("workspaces"), shortcut: "G W" },
+    { group: "Navigation", iconName: "ingestion", label: "Go to Ingestion", action: () => setActiveView("ingestion"), shortcut: "G I" },
+    { group: "Navigation", iconName: "vault", label: "Go to Knowledge Vault", action: () => setActiveView("vault"), shortcut: "G V" },
+    { group: "Navigation", iconName: "skills", label: "Go to Learned Skills", action: () => setActiveView("skills"), shortcut: "G S" },
+    { group: "Navigation", iconName: "watchers", label: "Go to Watchers", action: () => setActiveView("watchers"), shortcut: "G T" },
+    { group: "Navigation", iconName: "outputs", label: "Go to Outputs", action: () => setActiveView("outputs"), shortcut: "G O" },
+    { group: "Navigation", iconName: "topology", label: "Go to Agent Topology", action: () => setActiveView("topology"), shortcut: "G Y" },
+    { group: "Navigation", iconName: "axtree", label: "Go to AXTree Inspector", action: () => setActiveView("axtree"), shortcut: "G X" },
+    { group: "Navigation", iconName: "analytics", label: "Go to Watcher Analytics", action: () => setActiveView("watcher-analytics"), shortcut: "G U" },
+    { group: "Actions", iconName: "plus", label: "Create Vault Note", action: () => { setActiveView("vault"); Toast.show("Open a workspace to create a note", "info"); }, shortcut: "N N" },
+    { group: "Actions", iconName: "switch", label: "Switch Workspace", action: () => document.getElementById("workspace-selector")?.focus(), shortcut: "W W" },
+    { group: "Actions", iconName: "launch", label: "Launch Browser Profile", action: () => { setActiveView("profiles"); Toast.show("Choose a profile to launch", "info"); }, shortcut: "L L" },
+    { group: "Actions", iconName: "clear", label: "Clear Chat", action: () => { clearChat(); Toast.show("Chat cleared", "info"); }, shortcut: "K K" },
+    { group: "Actions", iconName: "settings", label: "Open Settings", action: () => { setActiveView("providers"); Toast.show("Settings opened in AI Providers tab", "info"); }, shortcut: "S S" },
   ];
 }
 
@@ -155,7 +156,7 @@ function renderCmdkResults(container: HTMLElement, query: string): void {
       const element = document.createElement("div");
       element.className = "cmdk-item";
       element.dataset.index = String(flatIndex);
-      element.innerHTML = `<span class="cmdk-item-icon ${item.iconClass}"></span><span>${item.label}</span><span class="cmdk-item-meta">${item.shortcut}</span>`;
+      element.innerHTML = `${icon(item.iconName, "cmdk-item-icon")}<span>${item.label}</span><span class="cmdk-item-meta">${item.shortcut}</span>`;
       element.addEventListener("click", () => {
         closeCommandPalette();
         item.action();
@@ -262,8 +263,35 @@ function initStatsPolling(): void {
   }, 5000);
 }
 
+function initNavIcons(): void {
+  const viewIconMap: Record<string, string> = {
+    playground: "playground",
+    sessions: "sessions",
+    vault: "vault",
+    watchers: "watchers",
+    workspaces: "workspaces",
+    ingestion: "ingestion",
+    outputs: "outputs",
+    harnesses: "harnesses",
+    providers: "providers",
+    profiles: "profiles",
+    skills: "skills",
+    topology: "topology",
+    axtree: "axtree",
+    "watcher-analytics": "analytics",
+  };
+  document.querySelectorAll(".nav-item").forEach((element) => {
+    const viewName = element.getAttribute("data-view");
+    const target = element.querySelector(".nav-icon");
+    if (!target || !viewName) return;
+    const iconName = viewIconMap[viewName] || "empty";
+    target.innerHTML = icon(iconName, "nav-icon");
+  });
+}
+
 async function init(): Promise<void> {
   initNavigation();
+  initNavIcons();
   initOverlayChrome();
   initCommandPalette();
 

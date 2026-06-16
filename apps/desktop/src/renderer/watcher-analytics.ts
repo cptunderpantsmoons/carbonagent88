@@ -210,7 +210,7 @@ export function renderWatcherAnalytics(container: HTMLElement): void {
   function refresh() {
     if (runs.length === 0) {
       empty.innerHTML = "";
-      empty.appendChild(createEmptyState("icon-analytics", "No Watcher Data", "Create a watcher to start tracking background task analytics."));
+      empty.appendChild(createEmptyState("analytics", "No Watcher Data", "Create a watcher to start tracking background task analytics."));
       empty.classList.remove('invisible');
       grid.classList.add('invisible');
       return;

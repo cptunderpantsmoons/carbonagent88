@@ -11,12 +11,13 @@ import {
   setProviderLabel,
   setWorkspaceLabel,
 } from "../view-helpers.js";
+import { icon } from "../icons.js";
 
 const HARNESS_DEFS = [
-  { id: "browser", label: "Browser", icon: "&#9672;" },
-  { id: "claude-code", label: "Claude Code", icon: "&#9670;" },
-  { id: "codex", label: "Codex", icon: "&#9671;" },
-  { id: "local", label: "Local Agent", icon: "&#9673;" },
+  { id: "browser", label: "Browser", iconName: "browser" },
+  { id: "claude-code", label: "Claude Code", iconName: "claude-code" },
+  { id: "codex", label: "Codex", iconName: "codex" },
+  { id: "local", label: "Local Agent", iconName: "local" },
 ];
 
 type HarnessConfigFromIPC = {
@@ -136,7 +137,7 @@ export function renderPlayground(container: HTMLElement): void {
       chip.type = "button";
       chip.className = "harness-chip";
       if (enabledIds.includes(def.id)) chip.classList.add("active");
-      chip.innerHTML = `<span class="harness-chip-icon">${def.icon}</span><span>${def.label}</span>`;
+      chip.innerHTML = `${icon(def.iconName, "harness-chip-icon")}<span>${def.label}</span>`;
       chip.addEventListener("click", async () => {
         const config = harnessConfigMap.get(def.id);
         if (!config) {

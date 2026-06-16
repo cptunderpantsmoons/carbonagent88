@@ -105,7 +105,7 @@ export function renderTopology(container: HTMLElement): void {
   function updateEmptyState() {
     if (!hasActiveTopology()) {
       emptyEl.innerHTML = "";
-      emptyEl.appendChild(createEmptyState("icon-topology", "No Active Topology", "Multi-agent delegation appears here when a complex task triggers sub-agents."));
+      emptyEl.appendChild(createEmptyState("topology", "No Active Topology", "Multi-agent delegation appears here when a complex task triggers sub-agents."));
       emptyEl.classList.remove('invisible');
       svg.classList.add('invisible');
     } else {

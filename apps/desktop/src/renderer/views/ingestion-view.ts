@@ -100,7 +100,7 @@ export function renderIngestion(container: HTMLElement): void {
 
       const jobs = resp.jobs ?? [];
       if (jobs.length === 0) {
-        results.appendChild(createEmptyState("icon-input", "No files found", "Downloaded files appear here for scanning."));
+        results.appendChild(createEmptyState("input", "No files found", "Downloaded files appear here for scanning."));
         return;
       }
 

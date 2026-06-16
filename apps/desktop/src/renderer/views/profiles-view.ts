@@ -148,7 +148,7 @@ async function renderProfileList(): Promise<void> {
   const profiles = await loadProfiles();
   list.innerHTML = "";
   if (profiles.length === 0) {
-    list.appendChild(createEmptyState("icon-profile", "No browser profiles", "Create a profile to authenticate browser sessions."));
+    list.appendChild(createEmptyState("profiles", "No browser profiles", "Create a profile to authenticate browser sessions."));
     return;
   }
 

@@ -92,7 +92,7 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
   const countEl = document.getElementById("outputs-count");
   if (!workspaceId) {
     if (countEl) countEl.textContent = "0 outputs";
-    grid.appendChild(createEmptyState("icon-output", "Select a workspace", "Choose a workspace to view generated documents."));
+    grid.appendChild(createEmptyState("output", "Select a workspace", "Choose a workspace to view generated documents."));
     return;
   }
 
@@ -108,7 +108,7 @@ async function renderOutputsGrid(grid: HTMLElement, workspaceId?: string, format
     if (countEl) countEl.textContent = `${docs.length} output${docs.length === 1 ? "" : "s"}`;
 
     if (docs.length === 0) {
-      grid.appendChild(createEmptyState("icon-output", "No outputs", format && format !== "all" ? `No ${format.toUpperCase()} documents found.` : "Generated documents appear here."));
+      grid.appendChild(createEmptyState("output", "No outputs", format && format !== "all" ? `No ${format.toUpperCase()} documents found.` : "Generated documents appear here."));
       return;
     }
 

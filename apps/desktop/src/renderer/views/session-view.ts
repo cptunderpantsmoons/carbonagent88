@@ -102,7 +102,7 @@ export function renderSessionView(container: HTMLElement): void {
 
   const sessionId = appState.currentSessionId;
   if (!sessionId) {
-    container.appendChild(createEmptyState("icon-session", "No active mission", "Launch an orchestration mission from Playground to monitor the live pipeline, evidence collection, and judgment."));
+    container.appendChild(createEmptyState("sessions", "No active mission", "Launch an orchestration mission from Playground to monitor the live pipeline, evidence collection, and judgment."));
     return;
   }
 
@@ -326,7 +326,7 @@ export function renderSessionView(container: HTMLElement): void {
       renderConsistency(mcConsistencyList);
     } catch (error: unknown) {
       Toast.show(`Failed to load mission: ${error instanceof Error ? error.message : String(error)}`, "error");
-      mcTimeline.replaceChildren(createEmptyState("icon-session", "Mission unavailable", "The session snapshot could not be loaded."));
+      mcTimeline.replaceChildren(createEmptyState("sessions", "Mission unavailable", "The session snapshot could not be loaded."));
     }
   }
 }
@@ -421,7 +421,7 @@ function renderHarnesses(container: HTMLElement): void {
   container.innerHTML = "";
   const harnesses = deriveHarnesses(state.events);
   if (harnesses.length === 0) {
-    container.appendChild(createEmptyState("icon-session", "No active harness", "Harnesses will appear once the mission starts collecting evidence."));
+    container.appendChild(createEmptyState("sessions", "No active harness", "Harnesses will appear once the mission starts collecting evidence."));
     return;
   }
   for (const h of harnesses) {
@@ -450,7 +450,7 @@ function renderHarnesses(container: HTMLElement): void {
 function renderTimeline(container: HTMLElement): void {
   container.replaceChildren();
   if (state.events.length === 0) {
-    container.appendChild(createEmptyState("icon-session", "No events", "Mission events will stream here in real time."));
+    container.appendChild(createEmptyState("sessions", "No events", "Mission events will stream here in real time."));
     return;
   }
   const recent = state.events.slice(-30);
@@ -493,7 +493,7 @@ function renderEvidence(grid: HTMLElement, countLabel: HTMLElement): void {
   grid.replaceChildren();
   const ws = state.workingSet;
   if (!ws || ws.documents.length === 0) {
-    grid.appendChild(createEmptyState("icon-output", "No evidence", "Documents will appear here as the mission collects them."));
+    grid.appendChild(createEmptyState("output", "No evidence", "Documents will appear here as the mission collects them."));
     countLabel.textContent = "0 documents";
     return;
   }
@@ -543,7 +543,7 @@ function renderGaps(container: HTMLElement): void {
   container.replaceChildren();
   const ws = state.workingSet;
   if (!ws || ws.gaps.length === 0) {
-    container.appendChild(createEmptyState("icon-empty", "No gaps", "Outstanding evidence gaps will surface here."));
+    container.appendChild(createEmptyState("empty", "No gaps", "Outstanding evidence gaps will surface here."));
     return;
   }
   for (const gap of ws.gaps) {
@@ -570,14 +570,14 @@ function renderConsistency(container: HTMLElement): void {
   container.replaceChildren();
   const { detected, gaps } = deriveDriftState(state.events);
   if (!detected) {
-    container.appendChild(createEmptyState("icon-empty", "All consistent", "No cross-harness drift detected."));
+    container.appendChild(createEmptyState("empty", "All consistent", "No cross-harness drift detected."));
     return;
   }
   for (const gap of gaps) {
     container.appendChild(renderDriftItem(gap));
   }
   if (gaps.length === 0) {
-    container.appendChild(createEmptyState("icon-empty", "Drift suspected", "A consistency check flagged potential divergence, but no specific details were provided."));
+    container.appendChild(createEmptyState("empty", "Drift suspected", "A consistency check flagged potential divergence, but no specific details were provided."));
   }
 }
 

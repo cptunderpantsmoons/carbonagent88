@@ -180,13 +180,13 @@ export function renderVault(container: HTMLElement): void {
     vaultFiles = await listVaultFiles();
     if (vaultFiles.length === 0 && !await resolveWorkspaceId()) {
       fileTree.innerHTML = "";
-      fileTree.appendChild(createEmptyState("icon-workspace", "Select a workspace", "Choose a workspace to open the vault."));
+      fileTree.appendChild(createEmptyState("workspaces", "Select a workspace", "Choose a workspace to open the vault."));
       return;
     }
     const filtered = filter ? vaultFiles.filter(f => f.toLowerCase().includes(filter.toLowerCase())) : vaultFiles;
     if (filtered.length === 0) {
       fileTree.innerHTML = "";
-      fileTree.appendChild(createEmptyState("icon-vault", filter ? "No matches" : "Empty Vault", filter ? "No files match your search." : "Create a new note to start building your knowledge base."));
+      fileTree.appendChild(createEmptyState("vault", filter ? "No matches" : "Empty Vault", filter ? "No files match your search." : "Create a new note to start building your knowledge base."));
       return;
     }
     fileTree.innerHTML = filtered.map(f => `

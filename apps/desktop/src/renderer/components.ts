@@ -2,17 +2,19 @@
  * Shared UI components — used by renderer sub-modules
  */
 
+import { icon } from "./icons.js";
+
 export function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }
 
-export function createEmptyState(iconClass: string, title: string, text: string): HTMLDivElement {
+export function createEmptyState(iconName: string, title: string, text: string): HTMLDivElement {
   const div = document.createElement('div');
   div.className = 'empty-state';
   div.innerHTML = `
-    <div class="empty-state-icon ${iconClass}"></div>
+    ${icon(iconName, 'empty-state-icon')}
     <div class="empty-state-title">${escapeHtml(title)}</div>
     <div class="empty-state-text">${escapeHtml(text)}</div>
   `;

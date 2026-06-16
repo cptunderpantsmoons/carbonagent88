@@ -115,7 +115,7 @@ export function renderSkills(container: HTMLElement): void {
 async function renderSkillCards(list: HTMLElement, workspaceId?: string): Promise<void> {
   list.innerHTML = "";
   if (!workspaceId) {
-    list.appendChild(createEmptyState("icon-skill", "Select a workspace", "Choose a workspace to view learned skills."));
+    list.appendChild(createEmptyState("skills", "Select a workspace", "Choose a workspace to view learned skills."));
     return;
   }
 
@@ -127,7 +127,7 @@ async function renderSkillCards(list: HTMLElement, workspaceId?: string): Promis
 
     const skills = resp.data ?? [];
     if (skills.length === 0) {
-      list.appendChild(createEmptyState("icon-skill", "No skills yet", "Skills are automatically learned from successful agent runs."));
+      list.appendChild(createEmptyState("skills", "No skills yet", "Skills are automatically learned from successful agent runs."));
       return;
     }
 

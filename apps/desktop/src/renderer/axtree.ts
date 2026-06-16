@@ -119,7 +119,7 @@ export function renderAXTree(container: HTMLElement): void {
   function updateEmptyState() {
     if (!hasReceivedAXTreeData) {
       emptyEl.innerHTML = "";
-      emptyEl.appendChild(createEmptyState("icon-axtree", "No AXTree Data", "Lock a browser profile to inspect the semantic accessibility tree."));
+      emptyEl.appendChild(createEmptyState("axtree", "No AXTree Data", "Lock a browser profile to inspect the semantic accessibility tree."));
       emptyEl.classList.remove('invisible');
       body.classList.add('invisible');
     } else {
