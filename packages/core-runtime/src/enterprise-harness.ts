@@ -21,6 +21,7 @@ import { AgentRuntime, type ToolExecutor } from "./agent.js";
 import { CachingProvider } from "./cache/caching-provider.js";
 import type { ResponseCache, SemanticCache } from "./cache/index.js";
 import { MCPClient, MCPToolAdapter } from "./mcp-integration.js";
+import { SkillAdvisor } from "./skills/index.js";
 import type { MCPServerConfig } from "@carbon-agent/shared-schemas";
 import type {
   AgentRole,
@@ -90,6 +91,8 @@ export interface EnterpriseHarnessConfig {
     responseCache?: ResponseCache;
     semanticCache?: SemanticCache;
   };
+  /** Enable in-memory skill learning via SkillAdvisor. */
+  enableSkillLearning?: boolean;
 }
 
 export interface FallbackStrategy {
@@ -113,12 +116,20 @@ export class EnterpriseAgentHarness extends EventEmitter {
   private workspaceContext?: WorkspaceContext;
   private mcpClient: MCPClient = new MCPClient();
   private mcpToolAdapter: MCPToolAdapter = new MCPToolAdapter(this.mcpClient);
+  private skillAdvisor?: SkillAdvisor;
 
   constructor(config: EnterpriseHarnessConfig) {
     super();
     this.config = config;
     this.workspaceContext = config.workspaceContext;
+    if (config.enableSkillLearning) {
+      this.skillAdvisor = new SkillAdvisor();
+    }
     this.registerDefaultAgentDefinitions();
+  }
+
+  getSkillAdvisor(): SkillAdvisor | undefined {
+    return this.skillAdvisor;
   }
 
   getCheckpoint(agentId: string): Checkpoint[] {
@@ -357,6 +368,16 @@ export class EnterpriseAgentHarness extends EventEmitter {
 
     const totalDuration = Date.now() - startTime;
     const status = failed === 0 ? "completed" : completed > 0 ? "partial" : "failed";
+
+    // Record outcomes for skill learning when enabled.
+    if (this.skillAdvisor) {
+      for (const taskResult of results) {
+        const task = plan.tasks.find((t) => t.id === taskResult.taskId);
+        if (task) {
+          this.skillAdvisor.recordOutcome(task.role, taskResult.success, taskResult.duration);
+        }
+      }
+    }
 
     return {
       planId: randomUUID(),

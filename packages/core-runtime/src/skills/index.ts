@@ -29,3 +29,10 @@ export {
   type BanditSelection,
   type BanditStats,
 } from "./bandit.js";
+
+// Learning advisor
+export {
+  SkillAdvisor,
+  createSkillAdvisor,
+  type SkillOutcomeContext,
+} from "./advisor.js";
