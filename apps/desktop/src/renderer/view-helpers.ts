@@ -319,20 +319,56 @@ export function openLiveViewport(profileId: string): void {
   }
 
   panel.classList.add("open");
-  body.innerHTML = '<div class="live-viewport-placeholder">Connecting to viewport stream...</div>';
+  body.innerHTML = `
+    <div class="live-viewport-starting">
+      <div class="live-viewport-spinner" aria-hidden="true"></div>
+      <div class="live-viewport-placeholder">Starting viewport stream…</div>
+    </div>
+  `;
 
-  window.carbonAPI.invoke({ type: "viewport/start", profileId }).then(() => {
-    if (!window.carbonAPI.onViewportFrame) {
-      body.innerHTML = '<div class="live-viewport-placeholder">Live viewport is not available in this build yet.</div>';
-      return;
+  let frameReceived = false;
+  const timeoutId = window.setTimeout(() => {
+    if (!frameReceived) {
+      body.innerHTML = '<div class="live-viewport-placeholder">No frames received yet. Lock a browser profile to begin streaming.</div>';
     }
-    appState.viewportCleanup = window.carbonAPI.onViewportFrame((frame: unknown) => {
+  }, 10000);
+
+  const cleanupTimer = () => window.clearTimeout(timeoutId);
+
+  const setupListener = () => {
+    const onViewportFrame = window.carbonAPI.onViewportFrame;
+    if (!onViewportFrame) return;
+    appState.viewportCleanup = onViewportFrame((frame: unknown) => {
       const typed = frame as { profileId?: string; mimeType?: string; base64?: string };
-      if (typed.profileId === profileId) {
-        body.innerHTML = `<img src="data:${typed.mimeType};base64,${typed.base64}" alt="viewport" class="img-viewport">`;
+      if (typed.profileId !== profileId || !typed.base64) return;
+
+      if (!frameReceived) {
+        frameReceived = true;
+        cleanupTimer();
+        body.innerHTML = "";
+        const img = document.createElement("img");
+        img.className = "img-viewport";
+        img.alt = "Live browser viewport";
+        body.appendChild(img);
+      }
+
+      const img = body.querySelector(".img-viewport") as HTMLImageElement | null;
+      if (img) {
+        img.src = `data:${typed.mimeType ?? "image/jpeg"};base64,${typed.base64}`;
       }
     });
+  };
+
+  if (!window.carbonAPI.onViewportFrame) {
+    cleanupTimer();
+    body.innerHTML = '<div class="live-viewport-placeholder">Live viewport events are not supported by this build.</div>';
+    return;
+  }
+
+  window.carbonAPI.invoke({ type: "viewport/start", profileId }).then(() => {
+    setupListener();
   }).catch((error: unknown) => {
+    cleanupTimer();
     body.innerHTML = `<div class="live-viewport-placeholder">Error: ${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`;
   });
 }

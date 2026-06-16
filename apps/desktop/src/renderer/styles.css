@@ -803,6 +803,17 @@ body {
 }
 .img-viewport { max-width: 100%; max-height: 100%; object-fit: contain; }
 .live-viewport-placeholder { color: var(--text-muted); font-size: var(--font-sm); }
+.live-viewport-starting {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.live-viewport-spinner {
+  width: 18px; height: 18px;
+  border: 2px solid var(--border-accent);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 #run-inspector-modal {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
   display: none; align-items: center; justify-content: center;
