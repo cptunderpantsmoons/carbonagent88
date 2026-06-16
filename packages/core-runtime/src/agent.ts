@@ -189,12 +189,16 @@ export interface ToolExecutor {
 // ---------------------------------------------------------------------------
 
 export interface AgentRunConfig {
-  providerConfig: AIProviderConfig;
+  providerConfig?: AIProviderConfig;
   runId: string;
   workspaceId: string;
   conversationId: string;
   systemPrompt?: string;
   maxSteps?: number;
+  tools?: ToolDefinition[];
+  model?: string;
+  /** Bypass createProvider and use this LLM provider directly. */
+  providerOverride?: LLMProvider;
 }
 
 export interface AgentStep {
@@ -213,7 +217,10 @@ export class AgentRuntime {
   private cancelled = false;
 
   constructor(config: AgentRunConfig, executor: ToolExecutor) {
-    this.provider = createProvider(config.providerConfig);
+    if (!config.providerConfig && !config.providerOverride) {
+      throw new Error("AgentRunConfig requires providerConfig or providerOverride");
+    }
+    this.provider = config.providerOverride ?? createProvider(config.providerConfig!);
     this.config = config;
     this.executor = executor;
   }
@@ -259,15 +266,16 @@ Always cite your sources when answering from retrieved documents.`;
       }
 
       // Log LLM request
-      this.logEvent(runLogPath, makeEvent(this.config.runId, "llm_request", { model: this.config.providerConfig.model, messages: this.history }));
+      const activeModel = this.config.model ?? this.config.providerConfig?.model ?? "";
+      this.logEvent(runLogPath, makeEvent(this.config.runId, "llm_request", { model: activeModel, messages: this.history }));
 
       // Call LLM
       let response;
       try {
         response = await this.provider.chat({
           messages: this.history,
-          model: this.config.providerConfig.model,
-          tools: CORE_TOOLS,
+          model: this.config.model ?? this.config.providerConfig?.model ?? "",
+          tools: this.config.tools ?? CORE_TOOLS,
           maxTokens: 4096,
           temperature: 0.7,
         });
@@ -279,7 +287,7 @@ Always cite your sources when answering from retrieved documents.`;
       }
 
       // Log LLM response
-      this.logEvent(runLogPath, makeEvent(this.config.runId, "llm_response", { model: this.config.providerConfig.model, content: response.content, usage: response.usage }));
+      this.logEvent(runLogPath, makeEvent(this.config.runId, "llm_response", { model: activeModel, content: response.content, usage: response.usage }));
 
       if (response.toolCalls && response.toolCalls.length > 0) {
         // Execute tools
@@ -366,8 +374,14 @@ Always cite your sources when answering from retrieved documents.`;
         return this.executor.memory_recall(input as { query: string; workspaceId: string; limit?: number });
       case "memory_store":
         return this.executor.memory_store(input as { key: string; content: string; workspaceId: string; tags?: string[] });
-      default:
+      default: {
+        const dynamic = this.executor as unknown as Record<string, ((input: Record<string, unknown>) => Promise<unknown>) | undefined>;
+        const fn = dynamic[name];
+        if (typeof fn === "function") {
+          return await fn(input);
+        }
         throw new Error(`Unknown tool: ${name}`);
+      }
     }
   }
 

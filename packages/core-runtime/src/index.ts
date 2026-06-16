@@ -6,7 +6,6 @@ export * from "./harness-code.js";
 export * from "./harness-local.js";
 export * from "./enterprise-harness.js";
 export * from "./mcp-integration.js";
-export * from "./parallel-execution.js";
 export * from "./memory/index.js";
 export * from "./cache/index.js";
 export * from "./skills/index.js";

@@ -117,7 +117,7 @@ export class SupervisorOrchestrator {
     baseConfig: Pick<AgentRunConfig, "providerConfig" | "workspaceId" | "conversationId">,
     executor: ToolExecutor,
   ) {
-    this.provider = createProvider(baseConfig.providerConfig);
+    this.provider = createProvider(baseConfig.providerConfig!);
     this.baseConfig = baseConfig;
     this.executor = executor;
   }

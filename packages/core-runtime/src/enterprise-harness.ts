@@ -16,7 +16,8 @@
 
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { LLMProvider, ChatMessage, ToolDefinition } from "./gateway.js";
+import type { LLMProvider, ToolDefinition } from "./gateway.js";
+import { AgentRuntime, type ToolExecutor } from "./agent.js";
 import type {
   AgentRole,
   AgentDefinition,
@@ -362,27 +363,43 @@ export class EnterpriseAgentHarness extends EventEmitter {
         throw new Error("No LLM provider available");
       }
 
-      const messages = this.buildMessages(def, task);
       const tools = this.buildToolDefinitions(def.tools);
-
-      const result = await this.runAgentLoop(
-        provider,
-        def,
-        messages,
-        tools,
-        task,
-        agentId,
+      const executor = this.buildExecutor();
+      const runtime = new AgentRuntime(
+        {
+          providerOverride: provider,
+          runId: agentId,
+          workspaceId: this.workspaceContext?.workspaceId ?? "unknown",
+          conversationId: agentId,
+          model: def.model,
+          systemPrompt: this.buildSystemPrompt(def),
+          maxSteps: def.maxSteps,
+          tools,
+        },
+        executor,
       );
 
+      let finalResult = "";
+      for await (const event of runtime.run(task.description)) {
+        if (event.type === "tool") {
+          this.emit("agent_step", { agentId, step: event.step?.step ?? 0, response: { content: event.step?.content ?? "", toolCalls: event.step?.toolCalls } });
+          agentState.steps = event.step?.step ?? 0;
+        } else if (event.type === "text") {
+          finalResult = event.content ?? "";
+        } else if (event.type === "error") {
+          throw new Error(event.error ?? "Agent runtime error");
+        }
+      }
+
       agentState.status = "completed";
-      agentState.result = result;
+      agentState.result = finalResult;
       agentState.endTime = new Date().toISOString();
 
       return {
         taskId: task.id,
         agentId,
         success: true,
-        output: result,
+        output: finalResult,
         error: null,
         duration: Date.now() - startTime,
       };
@@ -405,78 +422,33 @@ export class EnterpriseAgentHarness extends EventEmitter {
     }
   }
 
-  private async runAgentLoop(
-    provider: LLMProvider,
-    def: AgentDefinition,
-    messages: ChatMessage[],
-    tools: ToolDefinition[],
-    _task: AgentTask,
-    agentId: string,
-  ): Promise<string> {
-    let finalResult = "";
-
-    for (let step = 0; step < def.maxSteps; step++) {
-      const response = await provider.chat({
-        messages,
-        model: def.model ?? provider.name,
-        tools: tools.length > 0 ? tools : undefined,
-        maxTokens: def.maxTokens,
-        temperature: def.temperature,
-      });
-
-      this.emit("agent_step", { agentId, step, response });
-
-      if (response.toolCalls && response.toolCalls.length > 0) {
-        for (const tc of response.toolCalls) {
-          messages.push({
-            role: "assistant",
-            content: `Tool call: ${tc.name}\nInput: ${JSON.stringify(tc.input)}`,
-          });
-
-          const output = await this.executeToolCall(tc.name, tc.input);
-
-          messages.push({
-            role: "user",
-            content: typeof output === "string" ? output : JSON.stringify(output),
-          });
-        }
-      } else {
-        finalResult = response.content;
-        break;
-      }
-    }
-
-    return finalResult;
-  }
-
-  private async executeToolCall(name: string, input: Record<string, unknown>): Promise<unknown> {
-    const tool = this.toolRegistry.get(name);
-
-    if (!tool || !this.toolExecutor) {
-      return { error: `Tool ${name} not available` };
-    }
-
-    return this.toolExecutor.execute(tool, input);
-  }
-
-  private buildMessages(def: AgentDefinition, task: AgentTask): ChatMessage[] {
-    const messages: ChatMessage[] = [
-      { role: "system", content: def.systemPrompt },
-    ];
-
-    if (this.workspaceContext) {
-      messages.push({
-        role: "system",
-        content: `Workspace context:\n- Root: ${this.workspaceContext.rootPath}\n- Files: ${Array.from(this.workspaceContext.files.keys()).slice(0, 20).join(", ")}\n- Branch: ${this.workspaceContext.gitInfo?.branch ?? "unknown"}`,
-      });
-    }
-
-    messages.push({
-      role: "user",
-      content: task.description,
+  private buildExecutor(): ToolExecutor {
+    return new Proxy({} as ToolExecutor, {
+      get: (_target, name) => {
+        if (typeof name !== "string") return undefined;
+        return async (input: Record<string, unknown>) => {
+          const tool = this.toolRegistry.get(name);
+          if (!tool || !this.toolExecutor) {
+            throw new Error(`Tool ${name} not available`);
+          }
+          const result = await this.toolExecutor.execute(tool, input);
+          if (!result.success) {
+            throw new Error(result.error ?? `Tool ${name} failed`);
+          }
+          return result.output;
+        };
+      },
     });
+  }
 
-    return messages;
+  private buildSystemPrompt(def: AgentDefinition): string {
+    const parts = [def.systemPrompt];
+    if (this.workspaceContext) {
+      parts.push(
+        `Workspace context:\n- Root: ${this.workspaceContext.rootPath}\n- Files: ${Array.from(this.workspaceContext.files.keys()).slice(0, 20).join(", ")}\n- Branch: ${this.workspaceContext.gitInfo?.branch ?? "unknown"}`,
+      );
+    }
+    return parts.join("\n\n");
   }
 
   private buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
