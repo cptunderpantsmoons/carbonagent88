@@ -3,6 +3,7 @@ packages:
   - "apps/*"
 
 allowBuilds:
+  active-win: false
   protobufjs: true
   sharp: true
 

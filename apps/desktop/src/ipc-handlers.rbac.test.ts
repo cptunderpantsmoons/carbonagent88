@@ -31,6 +31,10 @@ vi.mock("electron", () => ({
       mockState.registeredHandler = handler;
     }),
   },
+  app: {
+    getPath: vi.fn(() => "/tmp"),
+    isPackaged: false,
+  },
   shell: {
     openPath: vi.fn().mockResolvedValue(""),
     showItemInFolder: vi.fn(),

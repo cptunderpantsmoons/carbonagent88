@@ -86,3 +86,17 @@ describe("ipcMain handler registration (Gate 4)", () => {
     expect(handleCalls.length).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("daemon mode helpers (Phase 7)", () => {
+  it("exports tray factory and cleanup", async () => {
+    const { createTray, destroyTray } = await import("./tray.js");
+    expect(typeof createTray).toBe("function");
+    expect(typeof destroyTray).toBe("function");
+  });
+
+  it("exports hotkey register/unregister functions", async () => {
+    const { registerHotkeys, unregisterAllHotkeys } = await import("./hotkeys.js");
+    expect(typeof registerHotkeys).toBe("function");
+    expect(typeof unregisterAllHotkeys).toBe("function");
+  });
+});

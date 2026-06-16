@@ -1,4 +1,35 @@
 /* Carbon Agent — Refined Obsidian Design System */
+
+.screen-context-view {
+  padding: 1.5rem;
+}
+.screen-context-view h2 {
+  margin-bottom: 1rem;
+}
+.screen-context-meta {
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  font-size: var(--font-sm);
+}
+.screen-context-bounds,
+.screen-context-time {
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  margin-top: 0.25rem;
+}
+.screen-context-image {
+  margin-bottom: 1rem;
+  min-height: 120px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.screen-context-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 :root {
   --bg-primary: #050505;
   --bg-secondary: #0b0b0b;

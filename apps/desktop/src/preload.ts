@@ -11,7 +11,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRequest, IpcResponse, SessionEvent } from "@carbon-agent/shared-schemas";
 import type { DesktopAXTreeNode, DesktopTopologyEdge, DesktopTopologyNode, DesktopViewportFrame, DesktopWatcherRun } from "./desktop-events.js";
-import type { ApprovalResolvedPayload, ApprovalRequestedPayload } from "./desktop-events.js";
+import type { ApprovalResolvedPayload, ApprovalRequestedPayload, ActiveWindowInfo, ScreenContextPayload } from "./desktop-events.js";
 
 export interface CarbonAPI {
   invoke(request: IpcRequest): Promise<IpcResponse>;
@@ -25,6 +25,8 @@ export interface CarbonAPI {
   onSessionEvent?: (callback: (data: { sessionId: string; event: SessionEvent }) => void) => () => void;
   onApprovalRequested?: (callback: (data: ApprovalRequestedPayload) => void) => () => void;
   onApprovalResolved?: (callback: (data: ApprovalResolvedPayload) => void) => () => void;
+  onScreenContext?: (callback: (data: ScreenContextPayload) => void) => () => void;
+  onActiveWindowChanged?: (callback: (data: { window: ActiveWindowInfo }) => void) => () => void;
 }
 
 function createListener<T>(channel: string) {
@@ -50,6 +52,8 @@ const api: CarbonAPI = {
   onSessionEvent: createListener<{ sessionId: string; event: SessionEvent }>("carbon-event:session-event"),
   onApprovalRequested: createListener<ApprovalRequestedPayload>("carbon-event:approval-requested"),
   onApprovalResolved: createListener<ApprovalResolvedPayload>("carbon-event:approval-resolved"),
+  onScreenContext: createListener<ScreenContextPayload>("carbon-event:screen-context"),
+  onActiveWindowChanged: createListener<{ window: ActiveWindowInfo }>("carbon-event:active-window-changed"),
 };
 
 contextBridge.exposeInMainWorld("carbonAPI", api);

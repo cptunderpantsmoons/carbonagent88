@@ -20,6 +20,7 @@ export type IconName =
   | "topology"
   | "axtree"
   | "analytics"
+  | "monitor"
   | "empty"
   | "input"
   | "output"
@@ -89,6 +90,10 @@ const ICON_PATHS: Record<IconName, string> = {
   // Analytics – simple bar chart
   analytics:
     "M2 12.5V8h3v4.5H2Zm4.5 0V4h3v8.5h-3Zm4.5 0V6h3v6.5h-3Z",
+
+  // Monitor – screen context daemon
+  monitor:
+    "M2 3.5a1.5 1.5 0 0 1 1.5-1.5h9a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 10.5v-7Zm1.5-.5a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5h-9ZM6 13h4v1.5H6V13Z",
 
   // Empty / placeholder – dashed square
   empty:

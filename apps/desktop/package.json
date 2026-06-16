@@ -37,9 +37,12 @@
     "@playwright/test": "^1.61.0",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^25.9.1",
+    "active-win": "^9.0.0",
     "bcryptjs": "^3.0.3",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.2",
+    "node-global-key-listener": "^0.3.0",
+    "screenshot-desktop": "^1.15.4",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
@@ -54,6 +57,7 @@
       "dist/**/*",
       "src/renderer/**/*",
       "assets/**/*",
+      "build/**/*",
       "package.json",
       "node_modules/**/*"
     ],
@@ -106,7 +110,11 @@
     "mac": {
       "target": "dmg",
       "icon": "assets/icon.icns",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "linux": {
       "target": [

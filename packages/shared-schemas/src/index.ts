@@ -997,6 +997,16 @@ export const StrictIpcRequestSchema = z.discriminatedUnion("type", [
     watcherId: UuidSchema,
   }),
   z.object({ type: z.literal("watcher/rules/delete"), id: UuidSchema }),
+
+  // Screen Context / Daemon / Hotkeys (Phase 7)
+  z.object({ type: z.literal("screen-context/get-active-window") }),
+  z.object({ type: z.literal("screen-context/capture-window"), profileId: z.string().optional() }),
+  z.object({ type: z.literal("screen-context/capture-screen"), profileId: z.string().optional() }),
+  z.object({ type: z.literal("screen-context/start-polling"), intervalMs: z.number().int().positive().optional() }),
+  z.object({ type: z.literal("screen-context/stop-polling") }),
+  z.object({ type: z.literal("hotkey/register"), name: z.string().min(1), accelerator: z.string().min(1) }),
+  z.object({ type: z.literal("hotkey/unregister"), name: z.string().min(1) }),
+  z.object({ type: z.literal("daemon/get-config") }),
 ]);
 
 export const IpcRequestSchema = z.preprocess(

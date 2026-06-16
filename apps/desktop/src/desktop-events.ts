@@ -142,6 +142,23 @@ export interface AnomalyDetectedPayload {
   triggeredAt: string;
 }
 
+export interface ActiveWindowInfo {
+  title: string;
+  app: string;
+  bounds: { x: number; y: number; width: number; height: number; displayId?: string };
+  timestamp: string;
+}
+
+export interface ScreenContextPayload {
+  profileId?: string;
+  window: ActiveWindowInfo;
+  image?: { mimeType: string; base64: string } | null;
+}
+
+export interface ActiveWindowChangedPayload {
+  window: ActiveWindowInfo;
+}
+
 export function emitAnomalyDetected(payload: AnomalyDetectedPayload): void {
   send("carbon-event:anomaly-detected", payload);
 }
@@ -183,6 +200,14 @@ export function emitApprovalRequested(payload: ApprovalRequestedPayload): void {
 
 export function emitApprovalResolved(payload: ApprovalResolvedPayload): void {
   send("carbon-event:approval-resolved", payload);
+}
+
+export function emitScreenContext(payload: ScreenContextPayload): void {
+  send("carbon-event:screen-context", payload);
+}
+
+export function emitActiveWindowChanged(payload: ActiveWindowChangedPayload): void {
+  send("carbon-event:active-window-changed", payload);
 }
 
 export async function startProfileTelemetry(profileId: string): Promise<void> {

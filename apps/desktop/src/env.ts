@@ -29,6 +29,15 @@ export interface CarbonConfig {
   telemetryEnabled: boolean;
   cloakHeadless: boolean;
   cloakSlowMo: number;
+  /** Run as a background daemon with tray + hotkeys. */
+  daemonMode: boolean;
+  hotkeyCapture: string;
+  hotkeyToggle: string;
+  trayEnabled: boolean;
+  /** Interval for automatic screen capture polling in daemon mode. */
+  screenCaptureIntervalMs: number;
+  /** If true, screen capture returns a blurred placeholder and skips screenshots. */
+  screenCapturePrivacyMode: boolean;
 }
 
 function findEnvFile(): string | null {
@@ -104,10 +113,16 @@ export function buildConfig(env: Record<string, string>): CarbonConfig {
       try { return app.getPath("userData"); } catch { return process.cwd(); }
     })(),
     logLevel: (env.CARBON_LOG_LEVEL as CarbonConfig["logLevel"]) || "info",
-    logPretty: env.CARBON_LOG_PRETTY === "true" || !app.isPackaged,
+    logPretty: env.CARBON_LOG_PRETTY === "true" || app.isPackaged !== true,
     telemetryEnabled: env.CARBON_TELEMETRY === "true",
     cloakHeadless: env.CLOAK_HEADLESS === "true",
     cloakSlowMo: Number(env.CLOAK_SLOW_MO || 50),
+    daemonMode: env.DAEMON_MODE !== "false",
+    hotkeyCapture: env.HOTKEY_CAPTURE || "CommandOrControl+Shift+C",
+    hotkeyToggle: env.HOTKEY_TOGGLE || "CommandOrControl+Shift+X",
+    trayEnabled: env.TRAY_ENABLED !== "false",
+    screenCaptureIntervalMs: Number(env.SCREEN_CAPTURE_INTERVAL_MS || 30_000),
+    screenCapturePrivacyMode: env.SCREEN_CAPTURE_PRIVACY_MODE === "true",
   };
 
   // Only include API keys if explicitly present

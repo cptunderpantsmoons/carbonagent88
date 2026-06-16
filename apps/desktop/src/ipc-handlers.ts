@@ -47,11 +47,14 @@ import {
 import { generateDocument } from "./document-generator.js";
 import { runAgent } from "./agent-runner.js";
 import { WatcherManager } from "./watcher-manager.js";
-import { emitVaultChange, startProfileTelemetry, stopProfileTelemetry } from "./desktop-events.js";
+import { emitVaultChange, startProfileTelemetry, stopProfileTelemetry, emitScreenContext } from "./desktop-events.js";
 import { emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { createApprovalCoordinator, getApprovalCoordinator, loadPendingApprovalsFromDb } from "./approval-coordinator.js";
 import { recordGeneratedDocument } from "./document-records.js";
 import { detectAllClis, detectCli } from "./cli-subagent.js";
+import { createScreenContextService } from "./screen-context.js";
+import { registerSingleHotkey, unregisterSingleHotkey } from "./hotkeys.js";
+import { buildConfig, loadEnv } from "./env.js";
 
 let _db: CarbonDatabase | null = null;
 async function ensureDb(): Promise<CarbonDatabase> {
@@ -147,6 +150,8 @@ type OrchestrationDb = CarbonDatabase & {
 
 const activeRuns = new Map<string, { cancel: () => void }>();
 let watcherManager: WatcherManager | null = null;
+const screenContextService = createScreenContextService();
+const hotkeyRegistry = new Map<string, string>();
 
 export function setWatcherManager(wm: WatcherManager): void {
   watcherManager = wm;
@@ -329,6 +334,17 @@ function actionPermission(req: { type: string; workspaceId?: string }): Permissi
     case "viewport/start":
     case "viewport/stop":
       return "profile:manage";
+    // Screen context / hotkeys
+    case "screen-context/get-active-window":
+    case "screen-context/capture-window":
+    case "screen-context/capture-screen":
+    case "screen-context/start-polling":
+    case "screen-context/stop-polling":
+    case "daemon/get-config":
+      return "workspace:read";
+    case "hotkey/register":
+    case "hotkey/unregister":
+      return "workspace:read";
     // Ingestion
     case "ingestion/scan":
       return "workspace:read";
@@ -1771,6 +1787,55 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       case "watcher/rules/delete": {
         await d.deleteAnomalyRule(request.id);
         return { type: "watcher/rules/delete.success" };
+      }
+
+      // ==================== Screen Context & Daemon ====================
+      case "screen-context/get-active-window": {
+        const window = await screenContextService.getActiveWindow();
+        return { type: "screen-context/get-active-window.success", data: { window } };
+      }
+      case "screen-context/capture-window": {
+        const profileId = typeof request.profileId === "string" ? request.profileId : undefined;
+        const data = await screenContextService.captureActiveWindow(profileId);
+        return { type: "screen-context/capture-window.success", data };
+      }
+      case "screen-context/capture-screen": {
+        const profileId = typeof request.profileId === "string" ? request.profileId : undefined;
+        const data = await screenContextService.captureFullScreen(profileId);
+        return { type: "screen-context/capture-screen.success", data };
+      }
+      case "screen-context/start-polling": {
+        const intervalMs = Number(request.intervalMs) || buildConfig(loadEnv()).screenCaptureIntervalMs;
+        screenContextService.startCaptureLoop(intervalMs);
+        return { type: "screen-context/start-polling.success", data: { intervalMs } };
+      }
+      case "screen-context/stop-polling": {
+        screenContextService.stopCaptureLoop();
+        return { type: "screen-context/stop-polling.success" };
+      }
+      case "hotkey/register": {
+        const name = typeof request.name === "string" ? request.name : "";
+        const accelerator = typeof request.accelerator === "string" ? request.accelerator : "";
+        const existing = hotkeyRegistry.get(name);
+        if (existing) unregisterSingleHotkey(existing);
+        const ok = registerSingleHotkey(name, accelerator, () => {
+          emitScreenContext({ window: { title: "hotkey", app: "carbon-agent", bounds: { x: 0, y: 0, width: 0, height: 0 }, timestamp: new Date().toISOString() } });
+        });
+        if (ok) hotkeyRegistry.set(name, accelerator);
+        return { type: "hotkey/register.success", data: { name, accelerator, ok } };
+      }
+      case "hotkey/unregister": {
+        const name = typeof request.name === "string" ? request.name : "";
+        const existing = hotkeyRegistry.get(name);
+        if (existing) {
+          unregisterSingleHotkey(existing);
+          hotkeyRegistry.delete(name);
+        }
+        return { type: "hotkey/unregister.success", data: { name } };
+      }
+      case "daemon/get-config": {
+        const cfg = buildConfig(loadEnv());
+        return { type: "daemon/get-config.success", data: { daemonMode: cfg.daemonMode, trayEnabled: cfg.trayEnabled, hotkeyCapture: cfg.hotkeyCapture, hotkeyToggle: cfg.hotkeyToggle, screenCaptureIntervalMs: cfg.screenCaptureIntervalMs, screenCapturePrivacyMode: cfg.screenCapturePrivacyMode } };
       }
 
       default:

@@ -15,6 +15,7 @@ import { renderSkills } from "./views/skills-view.js";
 import { renderWatchers } from "./views/watchers-view.js";
 import { renderWorkspaces } from "./views/workspaces-view.js";
 import { renderLogin } from "./views/login-view.js";
+import { cleanupScreenContext, renderScreenContext } from "./views/screen-context-view.js";
 
 type ViewModule = {
   render(container: HTMLElement): void;
@@ -76,6 +77,7 @@ const titleMap: Record<string, string> = {
   topology: "Agent Topology",
   axtree: "AXTree Inspector",
   "watcher-analytics": "Watcher Analytics",
+  "screen-context": "Screen Context",
 };
 
 function initNavigation(): void {
@@ -111,6 +113,7 @@ function getCommandPaletteItems(): CommandPaletteItem[] {
     { group: "Actions", iconName: "launch", label: "Launch Browser Profile", action: () => { setActiveView("profiles"); Toast.show("Choose a profile to launch", "info"); }, shortcut: "L L" },
     { group: "Actions", iconName: "clear", label: "Clear Chat", action: () => { clearChat(); Toast.show("Chat cleared", "info"); }, shortcut: "K K" },
     { group: "Actions", iconName: "settings", label: "Open Settings", action: () => { setActiveView("providers"); Toast.show("Settings opened in AI Providers tab", "info"); }, shortcut: "S S" },
+    { group: "Navigation", iconName: "monitor", label: "Go to Screen Context", action: () => setActiveView("screen-context"), shortcut: "G M" },
   ];
 }
 
@@ -280,6 +283,7 @@ function initNavIcons(): void {
     topology: "topology",
     axtree: "axtree",
     "watcher-analytics": "analytics",
+    "screen-context": "monitor",
   };
   document.querySelectorAll(".nav-item").forEach((element) => {
     const viewName = element.getAttribute("data-view");
@@ -336,6 +340,7 @@ async function init(): Promise<void> {
   registerView("topology", { render: renderTopology });
   registerView("axtree", { render: renderAXTree });
   registerView("watcher-analytics", { render: renderWatcherAnalytics });
+  registerView("screen-context", { render: renderScreenContext, onHide: cleanupScreenContext });
 
   initStatsPolling();
 

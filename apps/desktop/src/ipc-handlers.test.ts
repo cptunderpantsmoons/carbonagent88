@@ -50,6 +50,10 @@ vi.mock("electron", () => ({
       mockState.registeredHandler = handler;
     }),
   },
+  app: {
+    getPath: vi.fn(() => "/tmp"),
+    isPackaged: false,
+  },
 }));
 
 vi.mock("@carbon-agent/local-store", () => ({

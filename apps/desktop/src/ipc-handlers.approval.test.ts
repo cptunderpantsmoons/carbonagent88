@@ -36,6 +36,10 @@ vi.mock("electron", () => ({
       mockState.registeredHandler = handler;
     }),
   },
+  app: {
+    getPath: vi.fn(() => "/tmp"),
+    isPackaged: false,
+  },
   Notification: class {
     static isSupported() { return false; }
     show() { /* noop */ }
