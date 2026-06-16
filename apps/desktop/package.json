@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@carbon-agent/cloak-bridge": "workspace:*",
+    "@carbon-agent/connectors": "workspace:*",
     "@carbon-agent/core-runtime": "workspace:*",
     "@carbon-agent/ingestion": "workspace:*",
     "@carbon-agent/local-store": "workspace:*",

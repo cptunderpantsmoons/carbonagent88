@@ -13,6 +13,13 @@ import { IpcRequestSchema } from "@carbon-agent/shared-schemas";
 import { CarbonDatabase, initDatabase, createRunLog, readRunLog, getVaultDir, initSkillsTable, initMemoryTable, initModelRolesTable, dbListMemories, dbDeleteMemory, dbExportSkills, dbImportSkills, dbSetModelRole, dbListModelRoles, dbDeleteModelRole, dbGetModelRole, type ModelRoleName } from "@carbon-agent/local-store";
 import { createProvider } from "@carbon-agent/core-runtime";
 import { scanDocumentsDir } from "@carbon-agent/ingestion";
+import {
+  resolveConnectorAdapter,
+  runConnectorSync,
+  memoryAdapterForWorkspace,
+  type ConnectorConfig,
+  type ConnectorItemIngester,
+} from "@carbon-agent/connectors";
 import { generateDocument } from "./document-generator.js";
 import { runAgent } from "./agent-runner.js";
 import { WatcherManager } from "./watcher-manager.js";
@@ -72,6 +79,20 @@ type OrchestrationDb = CarbonDatabase & {
   storeEpisodicEvent(p: { id: string; workspaceId: string; type: string; summary: string; details?: Record<string, unknown>; outcome: string; embedding?: number[]; importance?: number; createdAt?: string }): Promise<void>;
   findEpisodicEvents(p: { workspaceId: string; types?: string | string[]; outcome?: string; after?: string; before?: string; limit?: number; includeEmbeddings?: boolean }): Promise<Record<string, unknown>[]>;
   deleteEpisodicEvents(ids: string[]): Promise<void>;
+  // Connectors
+  createConnectorConfig(p: { id: string; workspaceId: string; name: string; type: string; enabled?: boolean; schedule?: string | null; credentials?: string | null; options?: Record<string, unknown> }): Promise<string>;
+  updateConnectorConfig(id: string, p: { name?: string; enabled?: boolean; schedule?: string | null; credentials?: string | null; options?: Record<string, unknown> }): Promise<void>;
+  deleteConnectorConfig(id: string): Promise<void>;
+  listConnectorConfigs(workspaceId: string): Promise<Record<string, unknown>[]>;
+  getConnectorConfig(id: string): Promise<Record<string, unknown> | undefined>;
+  recordConnectorRun(p: { id: string; connectorId: string; workspaceId: string; startedAt: string; finishedAt?: string | null; status: string; itemsProcessed?: number; errorMessage?: string | null }): Promise<void>;
+  listConnectorRuns(connectorId: string, limit?: number): Promise<Record<string, unknown>[]>;
+  getConnectorState(connectorId: string): Promise<Record<string, unknown> | undefined>;
+  updateConnectorState(p: { connectorId: string; workspaceId: string; cursor?: string | null; lastItemId?: string | null }): Promise<void>;
+  // Anomaly rules
+  createAnomalyRule(p: { id: string; watcherId: string; metric: string; operator: string; threshold?: number | null; windowMinutes?: number; severity?: string; enabled?: boolean }): Promise<string>;
+  listAnomalyRulesForWatcher(watcherId: string): Promise<Record<string, unknown>[]>;
+  deleteAnomalyRule(id: string): Promise<void>;
 };
 
 const activeRuns = new Map<string, { cancel: () => void }>();
@@ -179,6 +200,8 @@ function mapProviderRow(row: Record<string, unknown> | undefined) {
 }
 
 function mapWatcherRow(row: Record<string, unknown>) {
+  let rules: Array<Record<string, unknown>> = [];
+  try { rules = JSON.parse(String(row.rules_json ?? "[]")) as Array<Record<string, unknown>>; } catch { rules = []; }
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
@@ -190,6 +213,7 @@ function mapWatcherRow(row: Record<string, unknown>) {
     recursive: Number(row.recursive ?? 1) !== 0,
     enabled: Boolean(Number(row.enabled ?? 0)),
     profileId: row.profile_id == null ? null : String(row.profile_id),
+    rules: rules.map((r) => mapWatcherRuleRow(r)),
     lastRunAt: row.last_run_at == null ? null : String(row.last_run_at),
     lastRunStatus: row.last_run_status == null ? null : String(row.last_run_status),
     createdAt: String(row.created_at ?? new Date().toISOString()),
@@ -311,6 +335,62 @@ function mapGraphEdgeRow(row: Record<string, unknown>) {
     properties,
     documentId: row.document_id == null ? null : String(row.document_id),
     createdAt: String(row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapConnectorConfigRow(row: Record<string, unknown>) {
+  let options: Record<string, unknown> = {};
+  try { options = JSON.parse(String(row.options_json ?? "{}")) as Record<string, unknown>; } catch { options = {}; }
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    workspaceId: String(row.workspace_id),
+    type: String(row.type),
+    enabled: Boolean(Number(row.enabled ?? 1)),
+    schedule: row.schedule == null ? null : String(row.schedule),
+    credentialsEncrypted: row.credentials_encrypted == null ? null : String(row.credentials_encrypted),
+    options,
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapConnectorRunRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    connectorId: String(row.connector_id),
+    workspaceId: String(row.workspace_id),
+    startedAt: String(row.started_at),
+    finishedAt: row.finished_at == null ? null : String(row.finished_at),
+    status: String(row.status),
+    itemsProcessed: Number(row.items_processed ?? 0),
+    errorMessage: row.error_message == null ? null : String(row.error_message),
+  };
+}
+
+function mapConnectorStateRow(row: Record<string, unknown>) {
+  return {
+    connectorId: String(row.connector_id),
+    workspaceId: String(row.workspace_id),
+    cursor: row.cursor == null ? null : String(row.cursor),
+    lastItemId: row.last_item_id == null ? null : String(row.last_item_id),
+    updatedAt: String(row.updated_at ?? new Date().toISOString()),
+  };
+}
+
+function mapWatcherRuleRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    watcherId: String(row.watcher_id),
+    metric: String(row.metric),
+    operator: String(row.operator),
+    threshold: row.threshold == null ? null : Number(row.threshold),
+    windowMinutes: Number(row.window_minutes ?? 60),
+    severity: String(row.severity ?? "warning"),
+    enabled: Boolean(Number(row.enabled ?? 1)),
+    targetId: row.target_id == null ? null : String(row.target_id),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
   };
 }
 
@@ -974,6 +1054,159 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
       // ==================== Stats ====================
       case "stats/list": {
         return { type: "stats/list.success", activeRuns: Math.max(activeRuns.size, await d.countRunningRuns()) };
+      }
+
+      // ==================== Connectors (Phase 3) ====================
+      case "connector/list": {
+        const rows = await d.listConnectorConfigs(request.workspaceId);
+        return { type: "connector/list.success", data: rows.map((row) => mapConnectorConfigRow(row as Record<string, unknown>)) };
+      }
+      case "connector/create": {
+        const id = crypto.randomUUID();
+        await d.createConnectorConfig({
+          id,
+          workspaceId: request.data.workspaceId,
+          name: request.data.name,
+          type: request.data.type,
+          enabled: request.data.enabled ?? true,
+          schedule: request.data.schedule ?? null,
+          credentials: request.data.credentials ?? null,
+          options: request.data.options,
+        });
+        const row = await d.getConnectorConfig(id);
+        return { type: "connector/create.success", data: mapConnectorConfigRow(row as Record<string, unknown>) };
+      }
+      case "connector/update": {
+        await d.updateConnectorConfig(request.id, {
+          name: request.data.name,
+          enabled: request.data.enabled,
+          schedule: request.data.schedule ?? undefined,
+          credentials: request.data.credentials ?? undefined,
+          options: request.data.options,
+        });
+        const row = await d.getConnectorConfig(request.id);
+        return { type: "connector/update.success", data: mapConnectorConfigRow(row as Record<string, unknown>) };
+      }
+      case "connector/delete": {
+        d.deleteConnectorConfig(request.id).catch(() => {});
+        return { type: "connector/delete.success" };
+      }
+      case "connector/sync": {
+        const row = await d.getConnectorConfig(request.id);
+        if (!row) return { type: "error", error: "Connector not found", code: "NOT_FOUND" };
+        const config: ConnectorConfig = {
+          id: String(row.id),
+          name: String(row.name),
+          workspaceId: String(row.workspace_id),
+          type: String(row.type) as ConnectorConfig["type"],
+          enabled: Boolean(Number(row.enabled ?? 1)),
+          schedule: row.schedule == null ? null : String(row.schedule),
+          credentialsEncrypted: row.credentials_encrypted == null ? null : String(row.credentials_encrypted),
+          options: JSON.parse(String(row.options_json ?? "{}")) as Record<string, unknown>,
+        };
+        // Run sync asynchronously so the IPC response can return quickly.
+        (async () => {
+          try {
+            const adapter = resolveConnectorAdapter(config.type);
+            const memoryAdapter = memoryAdapterForWorkspace(
+              {
+                storeGraphNode: (opts) => d.storeGraphNode(opts),
+                storeGraphEdge: (opts) => d.storeGraphEdge(opts),
+                storeEpisodicEvent: (opts) => d.storeEpisodicEvent(opts),
+                getConnectorState: async (connectorId, workspaceId) => {
+                  const r = await d.getConnectorState(connectorId);
+                  if (!r) return undefined;
+                  return { workspaceId, cursor: r.cursor ? String(r.cursor) : null, lastItemId: r.last_item_id ? String(r.last_item_id) : null };
+                },
+                updateConnectorState: (connectorId, workspaceId, s) =>
+                  d.updateConnectorState({ connectorId, workspaceId, cursor: s.cursor ?? undefined, lastItemId: s.lastItemId ?? undefined }),
+              },
+              config.workspaceId,
+            );
+            const ingester: ConnectorItemIngester = {
+              ingest: async (item, cfg, adapter) => {
+                const { runIngestionPipeline } = await import("@carbon-agent/ingestion");
+                const id = crypto.createHash("sha256").update(`${cfg.id}:${item.id}:${item.contentHash ?? item.body.slice(0, 200)}`).digest("hex").slice(0, 24);
+                await runIngestionPipeline({
+                  id,
+                  workspaceId: cfg.workspaceId,
+                  source: `${cfg.type}://${cfg.id}/${item.id}`,
+                  content: `${item.title}\n\n${item.body}`.trim(),
+                  mimeType: item.attachments?.length ? "multipart/related" : "text/plain",
+                }, { memory: adapter });
+              },
+            };
+
+            const run = await runConnectorSync(
+              {
+                recordConnectorRun: (r) => d.recordConnectorRun(r),
+                getConnectorState: async (connectorId) => {
+                  const r = await d.getConnectorState(connectorId);
+                  if (!r) return undefined;
+                  return { cursor: r.cursor ? String(r.cursor) : null, lastItemId: r.last_item_id ? String(r.last_item_id) : null };
+                },
+                updateConnectorState: (connectorId, workspaceId, s) =>
+                  d.updateConnectorState({ connectorId, workspaceId, cursor: s.cursor ?? undefined, lastItemId: s.lastItemId ?? undefined }),
+              },
+              config,
+              adapter,
+              memoryAdapter,
+              { ingester },
+            );
+            getWatcherManager().submitConnectorSyncResult({
+              connectorId: config.id,
+              workspaceId: config.workspaceId,
+              itemsProcessed: run.itemsProcessed,
+            }).catch(() => {});
+          } catch (e) {
+            console.error("[Connector] sync error", e);
+            await d.recordConnectorRun({
+              id: crypto.randomUUID(),
+              connectorId: request.id,
+              workspaceId: config.workspaceId,
+              startedAt: new Date().toISOString(),
+              status: "failed",
+              errorMessage: e instanceof Error ? e.message : String(e),
+            });
+          }
+        })().catch(() => {});
+
+        return { type: "connector/sync.success", data: { id: crypto.randomUUID(), connectorId: request.id, workspaceId: config.workspaceId, startedAt: new Date().toISOString(), finishedAt: null, status: "running", itemsProcessed: 0, errorMessage: null } };
+      }
+      case "connector/runs": {
+        const rows = await d.listConnectorRuns(request.id, request.limit ?? 50);
+        return { type: "connector/runs.success", data: rows.map((row) => mapConnectorRunRow(row as Record<string, unknown>)) };
+      }
+      case "connector/state/get": {
+        const row = await d.getConnectorState(request.id);
+        return { type: "connector/state/get.success", data: row ? mapConnectorStateRow(row as Record<string, unknown>) : null };
+      }
+
+      // ==================== Anomaly Rules (Phase 3) ====================
+      case "watcher/rules/list": {
+        const rows = await d.listAnomalyRulesForWatcher(request.watcherId);
+        return { type: "watcher/rules/list.success", data: rows.map((row) => mapWatcherRuleRow(row as Record<string, unknown>)) };
+      }
+      case "watcher/rules/create": {
+        const id = crypto.randomUUID();
+        await d.createAnomalyRule({
+          id,
+          watcherId: request.watcherId,
+          metric: request.data.metric,
+          operator: request.data.operator,
+          threshold: request.data.threshold ?? null,
+          windowMinutes: request.data.windowMinutes,
+          severity: request.data.severity,
+          enabled: request.data.enabled,
+          targetId: request.data.targetId ?? null,
+        });
+        const rows = await d.listAnomalyRulesForWatcher(request.watcherId);
+        const created = rows.find((r) => String(r.id) === id);
+        return { type: "watcher/rules/create.success", data: mapWatcherRuleRow(created as Record<string, unknown>) };
+      }
+      case "watcher/rules/delete": {
+        await d.deleteAnomalyRule(request.id);
+        return { type: "watcher/rules/delete.success" };
       }
 
       default:

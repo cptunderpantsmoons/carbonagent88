@@ -36,6 +36,9 @@ importers:
       '@carbon-agent/cloak-bridge':
         specifier: workspace:*
         version: link:../../packages/cloak-bridge
+      '@carbon-agent/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@carbon-agent/core-runtime':
         specifier: workspace:*
         version: link:../../packages/core-runtime
@@ -94,6 +97,25 @@ importers:
       playwright:
         specifier: ^1.49.0
         version: 1.60.0
+    devDependencies:
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@25.9.1)(jiti@2.7.0)
+
+  packages/connectors:
+    dependencies:
+      '@carbon-agent/local-store':
+        specifier: workspace:*
+        version: link:../local-store
+      '@carbon-agent/shared-schemas':
+        specifier: workspace:*
+        version: link:../shared-schemas
     devDependencies:
       '@types/node':
         specifier: ^25.9.1

@@ -185,6 +185,37 @@ export const LearnedSkillSchema = z.object({
 export type LearnedSkill = z.infer<typeof LearnedSkillSchema>;
 
 // ---------------------------------------------------------------------------
+// Anomaly Rules (Phase 3)
+// ---------------------------------------------------------------------------
+
+export const AnomalyMetricSchema = z.enum([
+  "new_file_count",
+  "file_size",
+  "run_failure_rate",
+  "connector_item_count",
+]);
+
+export const AnomalyOperatorSchema = z.enum(["gt", "lt", "eq", "changed"]);
+
+export const AnomalySeveritySchema = z.enum(["info", "warning", "critical"]);
+
+export const WatcherRuleSchema = z.object({
+  id: UuidSchema,
+  watcherId: UuidSchema,
+  metric: AnomalyMetricSchema,
+  operator: AnomalyOperatorSchema,
+  threshold: z.number().nullable().optional(),
+  windowMinutes: z.number().int().positive().default(60),
+  severity: AnomalySeveritySchema.default("warning"),
+  enabled: z.boolean().default(true),
+  targetId: z.string().nullable().optional(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type WatcherRule = z.infer<typeof WatcherRuleSchema>;
+
+// ---------------------------------------------------------------------------
 // Watcher
 // ---------------------------------------------------------------------------
 
@@ -203,6 +234,7 @@ export const WatcherSchema = z.object({
   recursive: z.boolean().default(true),
   enabled: z.boolean(),
   profileId: UuidSchema.nullable(),
+  rules: z.array(WatcherRuleSchema.omit({ watcherId: true })).default([]),
   lastRunAt: TimestampSchema.nullable(),
   lastRunStatus: WatcherStatusSchema.nullable(),
   createdAt: TimestampSchema,
@@ -573,6 +605,52 @@ export const HarnessConfigUpdateSchema = z.object({
 export type HarnessConfigUpdate = z.infer<typeof HarnessConfigUpdateSchema>;
 
 // ---------------------------------------------------------------------------
+// Connectors (Phase 3)
+// ---------------------------------------------------------------------------
+
+export const ConnectorTypeSchema = z.enum(["directory", "rest", "email", "calendar", "pm", "database"]);
+
+export const ConnectorConfigSchema = z.object({
+  id: UuidSchema,
+  name: z.string().min(1).max(256),
+  workspaceId: UuidSchema,
+  type: ConnectorTypeSchema,
+  enabled: z.boolean().default(true),
+  schedule: z.string().nullable().optional(),
+  credentialsEncrypted: z.string().nullable().optional(),
+  options: z.record(z.unknown()).default({}),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+
+export type ConnectorConfig = z.infer<typeof ConnectorConfigSchema>;
+
+export const ConnectorRunStatusSchema = z.enum(["success", "failed", "partial", "running"]);
+
+export const ConnectorRunSchema = z.object({
+  id: UuidSchema,
+  connectorId: UuidSchema,
+  workspaceId: UuidSchema,
+  startedAt: TimestampSchema,
+  finishedAt: TimestampSchema.nullable(),
+  status: ConnectorRunStatusSchema,
+  itemsProcessed: z.number().int().nonnegative().default(0),
+  errorMessage: z.string().max(2048).nullable().optional(),
+});
+
+export type ConnectorRun = z.infer<typeof ConnectorRunSchema>;
+
+export const ConnectorStateSchema = z.object({
+  connectorId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  cursor: z.string().nullable(),
+  lastItemId: z.string().nullable(),
+  updatedAt: TimestampSchema,
+});
+
+export type ConnectorState = z.infer<typeof ConnectorStateSchema>;
+
+// ---------------------------------------------------------------------------
 // IPC Contracts — Renderer → Main (requests)
 // ---------------------------------------------------------------------------
 
@@ -713,6 +791,48 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("harness-configs/get"), workspaceId: UuidSchema, harnessId: z.string() }),
   z.object({ type: z.literal("harness-configs/update"), id: UuidSchema, workspaceId: UuidSchema, harnessId: z.string(), data: HarnessConfigUpdateSchema }),
   z.object({ type: z.literal("harness-configs/test"), workspaceId: UuidSchema, harnessId: z.string() }),
+
+  // Connectors (Phase 3)
+  z.object({ type: z.literal("connector/list"), workspaceId: UuidSchema }),
+  z.object({
+    type: z.literal("connector/create"),
+    data: z.object({
+      name: z.string().min(1),
+      workspaceId: UuidSchema,
+      type: ConnectorTypeSchema,
+      enabled: z.boolean().optional(),
+      schedule: z.string().optional(),
+      credentials: z.string().optional(),
+      options: z.record(z.unknown()).optional(),
+    }),
+  }),
+  z.object({
+    type: z.literal("connector/update"),
+    id: UuidSchema,
+    data: z.object({
+      name: z.string().min(1).optional(),
+      enabled: z.boolean().optional(),
+      schedule: z.string().optional(),
+      credentials: z.string().optional(),
+      options: z.record(z.unknown()).optional(),
+    }),
+  }),
+  z.object({ type: z.literal("connector/delete"), id: UuidSchema }),
+  z.object({ type: z.literal("connector/sync"), id: UuidSchema }),
+  z.object({ type: z.literal("connector/runs"), id: UuidSchema, limit: z.number().int().positive().optional() }),
+  z.object({ type: z.literal("connector/state/get"), id: UuidSchema }),
+
+  // Anomaly rules (Phase 3)
+  z.object({
+    type: z.literal("watcher/rules/list"),
+    watcherId: UuidSchema,
+  }),
+  z.object({
+    type: z.literal("watcher/rules/create"),
+    data: WatcherRuleSchema.omit({ id: true, watcherId: true, createdAt: true, updatedAt: true }),
+    watcherId: UuidSchema,
+  }),
+  z.object({ type: z.literal("watcher/rules/delete"), id: UuidSchema }),
 ]);
 
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
@@ -833,6 +953,18 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("harness-configs/get.success"), data: HarnessConfigSchema.nullable() }),
   z.object({ type: z.literal("harness-configs/update.success"), data: HarnessConfigSchema }),
   z.object({ type: z.literal("harness-configs/test.success"), passed: z.boolean(), message: z.string() }),
+  // Connector responses (Phase 3)
+  z.object({ type: z.literal("connector/list.success"), data: z.array(ConnectorConfigSchema) }),
+  z.object({ type: z.literal("connector/create.success"), data: ConnectorConfigSchema }),
+  z.object({ type: z.literal("connector/update.success"), data: ConnectorConfigSchema }),
+  z.object({ type: z.literal("connector/delete.success") }),
+  z.object({ type: z.literal("connector/sync.success"), data: ConnectorRunSchema }),
+  z.object({ type: z.literal("connector/runs.success"), data: z.array(ConnectorRunSchema) }),
+  z.object({ type: z.literal("connector/state/get.success"), data: ConnectorStateSchema.nullable() }),
+  // Anomaly rule responses (Phase 3)
+  z.object({ type: z.literal("watcher/rules/list.success"), data: z.array(WatcherRuleSchema) }),
+  z.object({ type: z.literal("watcher/rules/create.success"), data: WatcherRuleSchema }),
+  z.object({ type: z.literal("watcher/rules/delete.success") }),
   // Stats
   z.object({ type: z.literal("stats/list.success"), activeRuns: z.number() }),
   // Graph Memory responses

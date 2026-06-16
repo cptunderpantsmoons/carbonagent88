@@ -325,104 +325,67 @@ function initTables(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_prompt_cache_hash ON prompt_cache(prompt_hash);
 
-    -- Response cache
-    CREATE TABLE IF NOT EXISTS response_cache (
-      id TEXT PRIMARY KEY,
-      prompt_hash TEXT NOT NULL,
-      model TEXT NOT NULL,
-      response TEXT NOT NULL,
-      input_tokens INTEGER NOT NULL,
-      output_tokens INTEGER NOT NULL,
-      cost_usd REAL NOT NULL DEFAULT 0,
-      hit_count INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_hit_at TEXT NOT NULL DEFAULT (datetime('now')),
-      expires_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_response_cache_hash ON response_cache(prompt_hash, model);
-
-    -- Cache metrics
-    CREATE TABLE IF NOT EXISTS cache_metrics (
-      id TEXT PRIMARY KEY,
-      cache_type TEXT NOT NULL,
-      requests INTEGER NOT NULL DEFAULT 0,
-      hits INTEGER NOT NULL DEFAULT 0,
-      misses INTEGER NOT NULL DEFAULT 0,
-      tokens_saved INTEGER NOT NULL DEFAULT 0,
-      cost_saved_usd REAL NOT NULL DEFAULT 0,
-      recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    -- Skill variants
-    CREATE TABLE IF NOT EXISTS skill_variants (
-      id TEXT PRIMARY KEY,
-      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-      version INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      parameters_json TEXT NOT NULL DEFAULT '{}',
-      tool_sequence_json TEXT NOT NULL,
-      trigger_pattern TEXT NOT NULL,
-      success_rate REAL NOT NULL DEFAULT 0,
-      execution_count INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_used_at TEXT,
-      UNIQUE(skill_id, version)
-    );
-
-    -- Skill outcomes
-    CREATE TABLE IF NOT EXISTS skill_outcomes (
-      id TEXT PRIMARY KEY,
-      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-      variant_id TEXT,
-      workspace_id TEXT NOT NULL,
-      success INTEGER NOT NULL,
-      duration_ms INTEGER NOT NULL,
-      error_type TEXT,
-      context_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_skill_outcomes_skill ON skill_outcomes(skill_id);
-    CREATE INDEX IF NOT EXISTS idx_skill_outcomes_workspace ON skill_outcomes(workspace_id);
-
-    -- Skill compositions
-    CREATE TABLE IF NOT EXISTS skill_compositions (
+    -- Connectors (Phase 3)
+    CREATE TABLE IF NOT EXISTS connector_configs (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
       name TEXT NOT NULL,
-      description TEXT NOT NULL,
-      steps_json TEXT NOT NULL,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      version INTEGER NOT NULL DEFAULT 1,
+      type TEXT NOT NULL CHECK(type IN ('directory','rest','email','calendar','pm','database')),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      schedule TEXT,
+      credentials_encrypted TEXT,
+      options_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE INDEX IF NOT EXISTS idx_connector_configs_workspace
+      ON connector_configs(workspace_id);
 
-    -- Skill versions
-    CREATE TABLE IF NOT EXISTS skill_versions (
+    CREATE TABLE IF NOT EXISTS connector_runs (
       id TEXT PRIMARY KEY,
-      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-      version INTEGER NOT NULL,
-      snapshot_json TEXT NOT NULL,
-      changelog TEXT NOT NULL,
-      parent_version INTEGER,
-      created_by TEXT NOT NULL DEFAULT 'system',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(skill_id, version)
+      connector_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL CHECK(status IN ('success','failed','partial','running')),
+      items_processed INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id);
+    CREATE INDEX IF NOT EXISTS idx_connector_runs_connector
+      ON connector_runs(connector_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_connector_runs_workspace
+      ON connector_runs(workspace_id, started_at DESC);
 
-    -- Bandit state
-    CREATE TABLE IF NOT EXISTS skill_bandit_state (
-      skill_id TEXT PRIMARY KEY REFERENCES skills(id) ON DELETE CASCADE,
-      variant_id TEXT,
-      alpha REAL NOT NULL DEFAULT 1.0,
-      beta REAL NOT NULL DEFAULT 1.0,
-      total_pulls INTEGER NOT NULL DEFAULT 0,
-      last_pull_at TEXT
+    CREATE TABLE IF NOT EXISTS connector_state (
+      connector_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      cursor TEXT,
+      last_item_id TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE INDEX IF NOT EXISTS idx_connector_state_workspace
+      ON connector_state(workspace_id);
+
+    -- Watcher anomaly rules (Phase 3)
+    CREATE TABLE IF NOT EXISTS anomaly_rules (
+      id TEXT PRIMARY KEY,
+      watcher_id TEXT NOT NULL REFERENCES watchers(id) ON DELETE CASCADE,
+      metric TEXT NOT NULL CHECK(metric IN ('new_file_count','file_size','run_failure_rate','connector_item_count')),
+      operator TEXT NOT NULL CHECK(operator IN ('gt','lt','eq','changed')),
+      threshold REAL,
+      window_minutes INTEGER NOT NULL DEFAULT 60,
+      severity TEXT NOT NULL DEFAULT 'warning' CHECK(severity IN ('info','warning','critical')),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      target_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_anomaly_rules_watcher
+      ON anomaly_rules(watcher_id);
   `);
   ensureBrowserProfileColumns();
   ensureWatcherColumns();
+  ensureWatcherRulesColumn();
   ensureMemoryColumns();
 }
 
@@ -456,6 +419,15 @@ function ensureWatcherColumns(): void {
   }
   if (!names.has("recursive")) {
     dbInstance.exec("ALTER TABLE watchers ADD COLUMN recursive INTEGER NOT NULL DEFAULT 1");
+  }
+}
+
+function ensureWatcherRulesColumn(): void {
+  if (!dbInstance) return;
+  const columns = getRows(dbInstance, "PRAGMA table_info(watchers)");
+  const names = new Set(columns.map((column: RowObj) => String(column.name)));
+  if (!names.has("rules_json")) {
+    dbInstance.exec("ALTER TABLE watchers ADD COLUMN rules_json TEXT NOT NULL DEFAULT '[]'");
   }
 }
 
@@ -888,13 +860,14 @@ export class CarbonDatabase {
     recursive?: boolean;
     prompt: string;
     enabled: boolean;
+    rulesJson?: string;
   }) {
     const db = await ensureDb();
     runStmt(
       db,
       `INSERT INTO watchers
-       (id, workspace_id, profile_id, name, trigger, cron_expression, watch_path, recursive, prompt, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+       (id, workspace_id, profile_id, name, trigger, cron_expression, watch_path, recursive, prompt, enabled, rules_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
       [
         p.id,
         p.workspaceId,
@@ -906,6 +879,7 @@ export class CarbonDatabase {
         p.recursive !== false ? 1 : 0,
         p.prompt,
         p.enabled ? 1 : 0,
+        p.rulesJson ?? "[]",
       ],
     );
     return p.id;
@@ -938,6 +912,7 @@ export class CarbonDatabase {
       prompt?: string;
       lastRunAt?: string;
       lastRunStatus?: string;
+      rulesJson?: string;
     },
   ) {
     const db = await ensureDb();
@@ -982,6 +957,10 @@ export class CarbonDatabase {
     if (p.name !== undefined) {
       fields.push("name = ?");
       vals.push(p.name);
+    }
+    if (p.rulesJson !== undefined) {
+      fields.push("rules_json = ?");
+      vals.push(p.rulesJson);
     }
     vals.push(id);
     runStmt(
@@ -1768,6 +1747,221 @@ export class CarbonDatabase {
       "DELETE FROM episodic_events WHERE workspace_id = ? AND created_at < ?",
       [workspaceId, before],
     );
+  }
+
+  // ==================== CONNECTORS (Phase 3) ====================
+  async createConnectorConfig(p: {
+    id: string;
+    workspaceId: string;
+    name: string;
+    type: string;
+    enabled?: boolean;
+    schedule?: string | null;
+    credentials?: string | null;
+    options?: Record<string, unknown>;
+  }): Promise<string> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO connector_configs
+       (id, workspace_id, name, type, enabled, schedule, credentials_encrypted, options_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+      [
+        p.id,
+        p.workspaceId,
+        p.name,
+        p.type,
+        p.enabled !== false ? 1 : 0,
+        p.schedule ?? null,
+        p.credentials ? encrypt(p.credentials) : null,
+        JSON.stringify(p.options ?? {}),
+      ],
+    );
+    return p.id;
+  }
+
+  async updateConnectorConfig(
+    id: string,
+    p: {
+      name?: string;
+      enabled?: boolean;
+      schedule?: string | null;
+      credentials?: string | null;
+      options?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const db = await ensureDb();
+    const fields: string[] = ["updated_at = datetime('now')"];
+    const vals: unknown[] = [];
+    if (p.name !== undefined) {
+      fields.push("name = ?");
+      vals.push(p.name);
+    }
+    if (p.enabled !== undefined) {
+      fields.push("enabled = ?");
+      vals.push(p.enabled ? 1 : 0);
+    }
+    if (p.schedule !== undefined) {
+      fields.push("schedule = ?");
+      vals.push(p.schedule ?? null);
+    }
+    if (p.credentials !== undefined) {
+      fields.push("credentials_encrypted = ?");
+      vals.push(p.credentials === null || p.credentials === undefined ? null : encrypt(p.credentials));
+    }
+    if (p.options !== undefined) {
+      fields.push("options_json = ?");
+      vals.push(JSON.stringify(p.options));
+    }
+    vals.push(id);
+    runStmt(db, `UPDATE connector_configs SET ${fields.join(", ")} WHERE id = ?`, vals);
+  }
+
+  async deleteConnectorConfig(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM connector_configs WHERE id = ?", [id]);
+    runStmt(db, "DELETE FROM connector_state WHERE connector_id = ?", [id]);
+  }
+
+  async listConnectorConfigs(workspaceId: string): Promise<Array<Record<string, unknown>>> {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      "SELECT * FROM connector_configs WHERE workspace_id = ? ORDER BY updated_at DESC",
+      [workspaceId],
+    );
+  }
+
+  async getConnectorConfig(id: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    const row = getRow(db, "SELECT * FROM connector_configs WHERE id = ?", [id]);
+    if (row && row.credentials_encrypted) {
+      try {
+        row.credentials_plaintext = decrypt(row.credentials_encrypted as string);
+      } catch {
+        /* leave encrypted */
+      }
+    }
+    return row;
+  }
+
+  async recordConnectorRun(p: {
+    id: string;
+    connectorId: string;
+    workspaceId: string;
+    startedAt: string;
+    finishedAt?: string | null;
+    status: string;
+    itemsProcessed?: number;
+    errorMessage?: string | null;
+  }): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO connector_runs
+       (id, connector_id, workspace_id, started_at, finished_at, status, items_processed, error_message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         finished_at = excluded.finished_at,
+         status = excluded.status,
+         items_processed = excluded.items_processed,
+         error_message = excluded.error_message`,
+      [
+        p.id,
+        p.connectorId,
+        p.workspaceId,
+        p.startedAt,
+        p.finishedAt ?? null,
+        p.status,
+        p.itemsProcessed ?? 0,
+        p.errorMessage ?? null,
+      ],
+    );
+  }
+
+  async listConnectorRuns(
+    connectorId: string,
+    limit = 50,
+  ): Promise<Array<Record<string, unknown>>> {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      "SELECT * FROM connector_runs WHERE connector_id = ? ORDER BY started_at DESC LIMIT ?",
+      [connectorId, limit],
+    );
+  }
+
+  async getConnectorState(connectorId: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM connector_state WHERE connector_id = ?", [connectorId]);
+  }
+
+  async updateConnectorState(p: {
+    connectorId: string;
+    workspaceId: string;
+    cursor?: string | null;
+    lastItemId?: string | null;
+  }): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO connector_state
+       (connector_id, workspace_id, cursor, last_item_id, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(connector_id) DO UPDATE SET
+         workspace_id = excluded.workspace_id,
+         cursor = excluded.cursor,
+         last_item_id = excluded.last_item_id,
+         updated_at = excluded.updated_at`,
+      [p.connectorId, p.workspaceId, p.cursor ?? null, p.lastItemId ?? null],
+    );
+  }
+
+  // ==================== ANOMALY RULES (Phase 3) ====================
+  async createAnomalyRule(p: {
+    id: string;
+    watcherId: string;
+    metric: string;
+    operator: string;
+    threshold?: number | null;
+    windowMinutes?: number;
+    severity?: string;
+    enabled?: boolean;
+    targetId?: string | null;
+  }): Promise<string> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO anomaly_rules
+       (id, watcher_id, metric, operator, threshold, window_minutes, severity, enabled, target_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+      [
+        p.id,
+        p.watcherId,
+        p.metric,
+        p.operator,
+        p.threshold ?? null,
+        p.windowMinutes ?? 60,
+        p.severity ?? "warning",
+        p.enabled !== false ? 1 : 0,
+        p.targetId ?? null,
+      ],
+    );
+    return p.id;
+  }
+
+  async listAnomalyRulesForWatcher(watcherId: string): Promise<Array<Record<string, unknown>>> {
+    const db = await ensureDb();
+    return getRows(
+      db,
+      "SELECT * FROM anomaly_rules WHERE watcher_id = ? ORDER BY created_at DESC",
+      [watcherId],
+    );
+  }
+
+  async deleteAnomalyRule(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM anomaly_rules WHERE id = ?", [id]);
   }
 }
 export { encrypt, decrypt } from "./crypto.js";

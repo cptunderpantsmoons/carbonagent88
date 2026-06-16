@@ -128,6 +128,24 @@ export function emitWatcherAnalytics(payload: { runs: DesktopWatcherRun[] }): vo
   send("carbon-event:watcher-analytics", payload);
 }
 
+export interface AnomalyDetectedPayload {
+  anomalyId: string;
+  watcherId?: string;
+  connectorId?: string;
+  workspaceId: string;
+  metric: string;
+  operator: string;
+  observedValue: number;
+  threshold?: number;
+  severity: "info" | "warning" | "critical";
+  message: string;
+  triggeredAt: string;
+}
+
+export function emitAnomalyDetected(payload: AnomalyDetectedPayload): void {
+  send("carbon-event:anomaly-detected", payload);
+}
+
 export async function startProfileTelemetry(profileId: string): Promise<void> {
   const current = profileTelemetry.get(profileId);
   if (current) {
