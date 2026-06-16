@@ -18,6 +18,8 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { LLMProvider, ToolDefinition } from "./gateway.js";
 import { AgentRuntime, type ToolExecutor } from "./agent.js";
+import { MCPClient, MCPToolAdapter } from "./mcp-integration.js";
+import type { MCPServerConfig } from "@carbon-agent/shared-schemas";
 import type {
   AgentRole,
   AgentDefinition,
@@ -102,6 +104,8 @@ export class EnterpriseAgentHarness extends EventEmitter {
   private activeAgents: Map<string, AgentState> = new Map();
   private _checkpoints: Map<string, Checkpoint[]> = new Map();
   private workspaceContext?: WorkspaceContext;
+  private mcpClient: MCPClient = new MCPClient();
+  private mcpToolAdapter: MCPToolAdapter = new MCPToolAdapter(this.mcpClient);
 
   constructor(config: EnterpriseHarnessConfig) {
     super();
@@ -164,6 +168,31 @@ export class EnterpriseAgentHarness extends EventEmitter {
 
   setToolExecutor(executor: EnterpriseToolExecutor): void {
     this.toolExecutor = executor;
+  }
+
+  // ---------------------------------------------------------------------------
+  // MCP Integration
+  // ---------------------------------------------------------------------------
+
+  async connectMCPServer(config: MCPServerConfig) {
+    await this.mcpClient.connectServer(config);
+    const tools = this.mcpToolAdapter.toEnterpriseTools();
+    this.registerTools(tools);
+    return this.mcpClient.getServer(config.id);
+  }
+
+  async disconnectMCPServer(serverId: string): Promise<void> {
+    await this.mcpClient.disconnectServer(serverId);
+    // Unregister tools provided by this server
+    for (const [name, tool] of this.toolRegistry) {
+      if (tool.category === "mcp" && name.startsWith(`mcp_${serverId}_`)) {
+        this.toolRegistry.delete(name);
+      }
+    }
+  }
+
+  getMCPClient(): MCPClient {
+    return this.mcpClient;
   }
 
   // ---------------------------------------------------------------------------
@@ -428,8 +457,21 @@ export class EnterpriseAgentHarness extends EventEmitter {
         if (typeof name !== "string") return undefined;
         return async (input: Record<string, unknown>) => {
           const tool = this.toolRegistry.get(name);
-          if (!tool || !this.toolExecutor) {
-            throw new Error(`Tool ${name} not available`);
+          if (!tool) {
+            throw new Error(`Tool ${name} not registered`);
+          }
+
+          // Route MCP-registered tools directly through the MCP adapter
+          if (tool.category === "mcp" && name.startsWith("mcp_")) {
+            const result = await this.mcpToolAdapter.createExecutor()(tool, input);
+            if (!result.success) {
+              throw new Error(result.error ?? `MCP tool ${name} failed`);
+            }
+            return result.output;
+          }
+
+          if (!this.toolExecutor) {
+            throw new Error(`Tool executor not configured for ${name}`);
           }
           const result = await this.toolExecutor.execute(tool, input);
           if (!result.success) {

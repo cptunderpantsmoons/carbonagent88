@@ -345,3 +345,78 @@ describe("ENTERPRISE_TOOLS", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// MCP Integration Tests
+// ---------------------------------------------------------------------------
+
+describe("MCP Integration", () => {
+  it("connects and registers discovered tools", async () => {
+    const harness = new EnterpriseAgentHarness(testConfig);
+    const state = await harness.connectMCPServer({
+      id: "550e8400-e29b-41d4-a716-446655440020",
+      name: "Test Server",
+      url: "http://localhost:1234",
+      transport: "sse",
+    });
+
+    expect(state).toBeDefined();
+    expect(state.status).toBe("connected");
+  });
+
+  it("disconnects and removes server tools", async () => {
+    const harness = new EnterpriseAgentHarness(testConfig);
+    harness.registerTool({
+      name: "mcp_test_keep",
+      description: "keep",
+      category: "mcp",
+      inputSchema: {},
+    });
+    harness.registerTool({
+      name: "mcp_server_ping",
+      description: "ping",
+      category: "mcp",
+      inputSchema: {},
+    });
+
+    await harness.disconnectMCPServer("server");
+
+    expect(harness.getTool("mcp_server_ping")).toBeUndefined();
+    expect(harness.getTool("mcp_test_keep")).toBeDefined();
+  });
+
+  it("routes MCP tool calls through the MCP client", async () => {
+    const harness = new EnterpriseAgentHarness(testConfig);
+    harness.addProvider("mock", mockProvider as any);
+    harness.setToolExecutor(mockToolExecutor);
+
+    harness.registerTool({
+      name: "mcp_test_greet",
+      description: "Greeter",
+      category: "mcp",
+      inputSchema: { type: "object", properties: { name: { type: "string" } } },
+    });
+
+    const mcpClient = harness.getMCPClient();
+    const callSpy = vi.spyOn(mcpClient, "callTool").mockResolvedValue({ greeting: "hello" });
+
+    const chatMock = vi.spyOn(mockProvider, "chat").mockResolvedValueOnce({
+      content: "",
+      toolCalls: [{ id: "1", name: "mcp_test_greet", input: { name: "world" } }],
+    });
+
+    const plan = await harness.createExecutionPlan([{
+      id: "550e8400-e29b-41d4-a716-446655440030",
+      description: "Call MCP tool",
+      role: "coder",
+      input: {},
+      priority: 50,
+    }]);
+
+    const result = await harness.executePlan(plan);
+
+    expect(chatMock).toHaveBeenCalled();
+    expect(callSpy).toHaveBeenCalledWith("test", "greet", { name: "world" });
+    expect(result.results[0]?.success).toBe(true);
+  });
+});
