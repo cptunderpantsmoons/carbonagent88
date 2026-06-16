@@ -2,6 +2,7 @@
   "name": "carbon-agent-desktop",
   "version": "0.1.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE.txt",
   "type": "module",
   "main": "dist/main.js",
   "scripts": {

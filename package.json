@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "description": "Carbon Agent — enterprise document reasoning with authenticated browser sessions",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "author": "Corporate Carbon",
   "workspaces": [
     "packages/*",
     "apps/*"
