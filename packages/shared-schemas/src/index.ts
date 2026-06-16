@@ -475,6 +475,47 @@ export const SessionWorkingSetSchema = z.object({
 export type SessionWorkingSet = z.infer<typeof SessionWorkingSetSchema>;
 
 // ---------------------------------------------------------------------------
+// Graph Memory
+// ---------------------------------------------------------------------------
+
+export const GraphNodeSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  name: z.string().min(1),
+  entityType: z.string().min(1),
+  properties: z.record(z.unknown()).default({}),
+  embedding: z.array(z.number()).default([]),
+  mentionCount: z.number().int().nonnegative().default(1),
+  createdAt: TimestampSchema,
+});
+
+export type GraphNode = z.infer<typeof GraphNodeSchema>;
+
+export const GraphEdgeSchema = z.object({
+  id: UuidSchema,
+  workspaceId: UuidSchema,
+  sourceId: UuidSchema,
+  targetId: UuidSchema,
+  relationType: z.string().min(1),
+  weight: z.number().min(0).max(1).default(0.5),
+  properties: z.record(z.unknown()).default({}),
+  documentId: UuidSchema.optional(),
+  createdAt: TimestampSchema,
+});
+
+export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
+
+export const GraphStatsSchema = z.object({
+  totalNodes: z.number().int().nonnegative(),
+  totalEdges: z.number().int().nonnegative(),
+  byEntityType: z.record(z.number().int().nonnegative()),
+  byRelationType: z.record(z.number().int().nonnegative()),
+  averageDegree: z.number(),
+});
+
+export type GraphStats = z.infer<typeof GraphStatsSchema>;
+
+// ---------------------------------------------------------------------------
 // Harness Config
 // ---------------------------------------------------------------------------
 
@@ -624,6 +665,13 @@ export const IpcRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("model-roles/delete"), role: ModelRoleNameSchema, workspaceId: UuidSchema }),
   // Stats
   z.object({ type: z.literal("stats/list") }),
+  // Graph Memory
+  z.object({ type: z.literal("graph/list"), workspaceId: UuidSchema }),
+  z.object({ type: z.literal("graph/get"), id: UuidSchema }),
+  z.object({ type: z.literal("graph/createNode"), workspaceId: UuidSchema, entityType: z.string().min(1), label: z.string().min(1), properties: z.record(z.unknown()).optional(), embedding: z.array(z.number()).optional() }),
+  z.object({ type: z.literal("graph/createEdge"), workspaceId: UuidSchema, sourceId: UuidSchema, targetId: UuidSchema, relationType: z.string().min(1), documentId: UuidSchema.optional(), weight: z.number().min(0).max(1).optional() }),
+  z.object({ type: z.literal("graph/delete"), id: UuidSchema, kind: z.enum(["node", "edge"]) }),
+  z.object({ type: z.literal("graph/query"), workspaceId: UuidSchema, nodeIds: z.array(UuidSchema).optional(), relationType: z.string().optional(), hops: z.number().int().min(1).max(5).optional() }),
   // Harness Configs
   z.object({ type: z.literal("harness-configs/list"), workspaceId: UuidSchema }),
   z.object({ type: z.literal("harness-configs/get"), workspaceId: UuidSchema, harnessId: z.string() }),
@@ -747,6 +795,13 @@ export const IpcResponseSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("harness-configs/test.success"), passed: z.boolean(), message: z.string() }),
   // Stats
   z.object({ type: z.literal("stats/list.success"), activeRuns: z.number() }),
+  // Graph Memory responses
+  z.object({ type: z.literal("graph/list.success"), data: z.array(GraphNodeSchema) }),
+  z.object({ type: z.literal("graph/get.success"), data: GraphNodeSchema.nullable() }),
+  z.object({ type: z.literal("graph/createNode.success"), data: GraphNodeSchema }),
+  z.object({ type: z.literal("graph/createEdge.success"), data: GraphEdgeSchema }),
+  z.object({ type: z.literal("graph/delete.success") }),
+  z.object({ type: z.literal("graph/query.success"), data: z.array(GraphEdgeSchema) }),
   // Errors
   z.object({ type: z.literal("error"), error: z.string(), code: z.string().optional() }),
   // Events (streaming)

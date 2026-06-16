@@ -59,6 +59,15 @@ type OrchestrationDb = CarbonDatabase & {
     provenanceScore: number;
   }): Promise<void>;
   getSessionWorkingSet(sessionId: string): Promise<Record<string, unknown> | undefined>;
+  // Graph memory helpers
+  storeGraphNode(p: { id: string; workspaceId: string; type: string; label: string; properties?: Record<string, unknown>; embedding?: number[]; mentionCount?: number }): Promise<void>;
+  getGraphNode(id: string): Promise<Record<string, unknown> | undefined>;
+  getGraphEdge(id: string): Promise<Record<string, unknown> | undefined>;
+  findGraphNodes(p: { workspaceId: string; type?: string; label?: string; limit?: number }): Promise<Record<string, unknown>[]>;
+  findGraphEdges(p: { workspaceId: string; sourceId?: string; targetId?: string; relationType?: string }): Promise<Record<string, unknown>[]>;
+  storeGraphEdge(p: { id: string; sourceId: string; targetId: string; relationType: string; workspaceId: string; documentId?: string | null; weight?: number; properties?: Record<string, unknown> }): Promise<void>;
+  deleteGraphNode(id: string): Promise<void>;
+  deleteGraphEdge(id: string): Promise<void>;
 };
 
 const activeRuns = new Map<string, { cancel: () => void }>();
@@ -241,6 +250,39 @@ function mapSessionEventRow(row: Record<string, unknown>) {
     summary: String(row.summary),
     payload: JSON.parse(String(row.payload_json ?? "{}")),
     createdAt: String(row.created_at),
+  };
+}
+
+function mapGraphNodeRow(row: Record<string, unknown>) {
+  let properties: Record<string, unknown>;
+  try { properties = JSON.parse(String(row.properties_json ?? "{}")) as Record<string, unknown>; } catch { properties = {}; }
+  let embedding: number[];
+  try { embedding = JSON.parse(String(row.embedding_json ?? "[]")) as number[]; } catch { embedding = []; }
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    name: String(row.name),
+    entityType: String(row.entity_type),
+    properties,
+    embedding,
+    mentionCount: Number(row.mention_count ?? 1),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mapGraphEdgeRow(row: Record<string, unknown>) {
+  let properties: Record<string, unknown>;
+  try { properties = JSON.parse(String(row.properties_json ?? "{}")) as Record<string, unknown>; } catch { properties = {}; }
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    sourceId: String(row.source_id),
+    targetId: String(row.target_id),
+    relationType: String(row.relation_type),
+    weight: Number(row.weight ?? 0.5),
+    properties,
+    documentId: row.document_id == null ? null : String(row.document_id),
+    createdAt: String(row.created_at ?? new Date().toISOString()),
   };
 }
 
@@ -783,6 +825,67 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
           return { type: "harness-configs/test.success", passed: true, message: "Browser harness readiness is verified when a Cloak Bridge profile is locked." };
         }
         return { type: "harness-configs/test.success", passed: false, message: `Connection test not available for harness ${harnessId}.` };
+      }
+
+      // ==================== Graph Memory ====================
+      case "graph/list": {
+        const rows = await d.findGraphNodes({ workspaceId: request.workspaceId });
+        return { type: "graph/list.success", data: rows.map((row) => mapGraphNodeRow(row as Record<string, unknown>)) };
+      }
+      case "graph/get": {
+        const row = await d.getGraphNode(request.id);
+        if (!row) return { type: "error", error: "Node not found", code: "NOT_FOUND" };
+        return { type: "graph/get.success", data: mapGraphNodeRow(row as Record<string, unknown>) };
+      }
+      case "graph/createNode": {
+        const id = crypto.randomUUID();
+        await d.storeGraphNode({
+          id,
+          workspaceId: request.workspaceId,
+          type: request.entityType,
+          label: request.label,
+          properties: request.properties,
+          embedding: request.embedding,
+        });
+        const row = await d.getGraphNode(id);
+        return { type: "graph/createNode.success", data: mapGraphNodeRow(row as Record<string, unknown>) };
+      }
+      case "graph/createEdge": {
+        const id = crypto.randomUUID();
+        // Ensure endpoints exist so referential integrity is satisfied.
+        const [sourceNode, targetNode] = await Promise.all([
+          d.getGraphNode(request.sourceId),
+          d.getGraphNode(request.targetId),
+        ]);
+        if (!sourceNode || !targetNode) {
+          return { type: "error", error: "Source or target node not found", code: "NOT_FOUND" };
+        }
+        await d.storeGraphEdge({
+          id,
+          sourceId: request.sourceId,
+          targetId: request.targetId,
+          relationType: request.relationType,
+          workspaceId: request.workspaceId,
+          documentId: request.documentId,
+          weight: request.weight,
+        });
+        const row = await d.getGraphEdge(id);
+        return { type: "graph/createEdge.success", data: mapGraphEdgeRow(row as Record<string, unknown>) };
+      }
+      case "graph/delete": {
+        if (request.kind === "node") {
+          await d.deleteGraphNode(request.id);
+        } else {
+          await d.deleteGraphEdge(request.id);
+        }
+        return { type: "graph/delete.success" };
+      }
+      case "graph/query": {
+        const edges = await d.findGraphEdges({
+          workspaceId: request.workspaceId,
+          relationType: request.relationType,
+        });
+        return { type: "graph/query.success", data: edges.map((row) => mapGraphEdgeRow(row as Record<string, unknown>)) };
       }
 
       // ==================== Stats ====================

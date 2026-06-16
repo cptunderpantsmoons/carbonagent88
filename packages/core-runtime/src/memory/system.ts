@@ -14,6 +14,7 @@ import { WorkingMemory, createWorkingMemory } from "./working.js";
 import { SemanticMemory, type SemanticMemoryEntry, type SemanticMemoryResult, vectorSimilarity } from "./semantic.js";
 import { EpisodicMemory, type EpisodicEvent, type EpisodicEventType, type EpisodicOutcome } from "./episodic.js";
 import { MemoryConsolidation, type ConsolidationConfig, type ConsolidationResult } from "./consolidation.js";
+import { GraphMemory, type GraphNode, type GraphEdge, type GraphStats, type GraphPersistence } from "./graph.js";
 import { estimateTokens } from "./token-counter.js";
 
 // ---------------------------------------------------------------------------
@@ -32,12 +33,16 @@ export interface MemorySystemConfig {
     maxEvents: number;
     decayRate: number;
   };
+  graph: {
+    persistence?: GraphPersistence;
+  };
   consolidation: ConsolidationConfig;
 }
 
 export interface MemoryInjection {
   semantic: SemanticMemoryEntry[];
   episodic: EpisodicEvent[];
+  graph: GraphNode[];
   totalTokens: number;
 }
 
@@ -55,6 +60,7 @@ export interface MemorySystemStats {
     totalEvents: number;
     byType: Record<string, number>;
   };
+  graphMemory: GraphStats;
   consolidation: {
     lastRun?: string;
     totalConsolidations: number;
@@ -67,11 +73,19 @@ export interface MemoryQuery {
   limit?: number;
   minImportance?: number;
   includeRecent?: boolean;
+  includeGraph?: boolean;
+}
+
+export interface GraphQueryResult {
+  node: GraphNode;
+  edge: GraphEdge;
+  depth: number;
 }
 
 export interface MemoryQueryResult {
   semantic: SemanticMemoryResult[];
   episodic: Array<{ event: EpisodicEvent; relevance: number }>;
+  graph: GraphQueryResult[];
   totalResults: number;
   queryTime: number;
 }
@@ -85,6 +99,7 @@ export class AgenticMemorySystem extends EventEmitter {
   private workingMemory: WorkingMemory;
   private semanticMemory: SemanticMemory;
   private episodicMemory: EpisodicMemory;
+  private graphMemory: GraphMemory;
   private consolidation: MemoryConsolidation;
 
   constructor(config: Partial<MemorySystemConfig> = {}) {
@@ -100,6 +115,9 @@ export class AgenticMemorySystem extends EventEmitter {
       episodic: {
         maxEvents: config.episodic?.maxEvents ?? 10000,
         decayRate: config.episodic?.decayRate ?? 0.01,
+      },
+      graph: {
+        persistence: config.graph?.persistence,
       },
       consolidation: config.consolidation ?? {
         enabled: true,
@@ -121,6 +139,9 @@ export class AgenticMemorySystem extends EventEmitter {
     this.episodicMemory = new EpisodicMemory({
       maxEvents: this.config.episodic.maxEvents,
       decayRate: this.config.episodic.decayRate,
+    });
+    this.graphMemory = new GraphMemory({
+      persistence: this.config.graph.persistence,
     });
     this.consolidation = new MemoryConsolidation(
       this.semanticMemory,
@@ -273,6 +294,109 @@ export class AgenticMemorySystem extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Graph Memory (Entities & Relationships)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Store or update a graph node.
+   */
+  storeGraphNode(node: Omit<GraphNode, "mentionCount" | "createdAt">): GraphNode {
+    return this.graphMemory.addNode(node);
+  }
+
+  /**
+   * Get a graph node by ID.
+   */
+  getGraphNode(id: string): GraphNode | null {
+    return this.graphMemory.getNode(id);
+  }
+
+  /**
+   * Find graph nodes for the current workspace.
+   */
+  findGraphNodes(options: {
+    type?: string;
+    label?: string;
+    limit?: number;
+  } = {}): GraphNode[] {
+    return this.graphMemory.listNodes(this.config.workspaceId, options.type, options.limit);
+  }
+
+  /**
+   * Store or update a graph edge.
+   */
+  storeGraphEdge(edge: Omit<GraphEdge, "createdAt">): GraphEdge | null {
+    return this.graphMemory.addEdge(edge);
+  }
+
+  /**
+   * Find graph edges for the current workspace.
+   */
+  findGraphEdges(options: {
+    relationType?: string;
+    limit?: number;
+  } = {}): GraphEdge[] {
+    return this.graphMemory.listEdges(this.config.workspaceId, options.relationType, options.limit);
+  }
+
+  /**
+   * Delete a graph node and its connected edges.
+   */
+  deleteGraphNode(id: string): boolean {
+    return this.graphMemory.deleteNode(id);
+  }
+
+  /**
+   * Delete a graph edge.
+   */
+  deleteGraphEdge(id: string): boolean {
+    return this.graphMemory.deleteEdge(id);
+  }
+
+  /**
+   * Query the graph by node IDs, relation type, or hop traversal.
+   */
+  queryGraph(options: {
+    nodeIds?: string[];
+    relationType?: string;
+    hops?: number;
+    limit?: number;
+  } = {}): Array<{ node: GraphNode; edge: GraphEdge; depth: number }> {
+    const results: Array<{ node: GraphNode; edge: GraphEdge; depth: number }> = [];
+    const seen = new Set<string>();
+    const startNodeIds = options.nodeIds ?? [];
+    const maxHops = options.hops ?? 2;
+
+    for (const startId of startNodeIds) {
+      if (seen.has(startId)) continue;
+      seen.add(startId);
+      const paths = this.graphMemory.traverse(startId, {
+        maxDepth: maxHops,
+        relationType: options.relationType,
+        limit: options.limit ?? 20,
+      });
+      for (const path of paths) {
+        for (let i = 0; i < path.nodes.length; i++) {
+          const node = path.nodes[i];
+          const edge = path.edges[i];
+          if (!node || !edge) continue;
+          if (node.workspaceId !== this.config.workspaceId) continue;
+          results.push({ node, edge, depth: i + 1 });
+        }
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get graph memory statistics.
+   */
+  graphStats(): GraphStats {
+    return this.graphMemory.getStats(this.config.workspaceId);
+  }
+
+  // ---------------------------------------------------------------------------
   // Hybrid Query (Cross-Tier Retrieval)
   // ---------------------------------------------------------------------------
 
@@ -286,6 +410,7 @@ export class AgenticMemorySystem extends EventEmitter {
     const results: MemoryQueryResult = {
       semantic: [],
       episodic: [],
+      graph: [],
       totalResults: 0,
       queryTime: 0,
     };
@@ -311,7 +436,25 @@ export class AgenticMemorySystem extends EventEmitter {
       results.episodic = episodicResults;
     }
 
-    results.totalResults = results.semantic.length + results.episodic.length;
+    // Query graph neighbors when requested
+    if (memoryQuery.includeGraph !== false) {
+      const searchResults = this.graphMemory.search(
+        memoryQuery.text,
+        this.config.workspaceId,
+        { limit },
+      );
+      for (const result of searchResults.slice(0, limit)) {
+        const nodeResults = this.queryGraph({
+          nodeIds: [result.node.id],
+          relationType: memoryQuery.type === "all" ? undefined : undefined,
+          hops: 2,
+          limit,
+        });
+        results.graph.push(...nodeResults);
+      }
+    }
+
+    results.totalResults = results.semantic.length + results.episodic.length + results.graph.length;
     results.queryTime = Date.now() - startTime;
 
     return results;
@@ -331,6 +474,7 @@ export class AgenticMemorySystem extends EventEmitter {
     const injection: MemoryInjection = {
       semantic: [],
       episodic: [],
+      graph: [],
       totalTokens: 0,
     };
 
@@ -367,6 +511,20 @@ export class AgenticMemorySystem extends EventEmitter {
       }
     }
 
+    // Get relevant graph nodes
+    const graphResults = this.graphMemory.search(
+      context,
+      this.config.workspaceId,
+      { limit: 5 },
+    );
+    for (const result of graphResults) {
+      const tokens = estimateTokens(result.node.name);
+      if (tokens <= remainingTokens) {
+        injection.graph.push(result.node);
+        remainingTokens -= tokens;
+      }
+    }
+
     injection.totalTokens = maxTokens - remainingTokens;
 
     return injection;
@@ -378,7 +536,7 @@ export class AgenticMemorySystem extends EventEmitter {
   async injectMemories(context: string): Promise<void> {
     const injection = await this.getMemoryInjection(context);
 
-    if (injection.semantic.length > 0 || injection.episodic.length > 0) {
+    if (injection.semantic.length > 0 || injection.episodic.length > 0 || injection.graph.length > 0) {
       const memoryLines: string[] = [];
 
       if (injection.semantic.length > 0) {
@@ -392,6 +550,13 @@ export class AgenticMemorySystem extends EventEmitter {
         memoryLines.push("Recent Events:");
         for (const evt of injection.episodic) {
           memoryLines.push(`- [${evt.type}] ${evt.summary}`);
+        }
+      }
+
+      if (injection.graph.length > 0) {
+        memoryLines.push("Related Entities:");
+        for (const entity of injection.graph) {
+          memoryLines.push(`- [${entity.entityType}] ${entity.name}`);
         }
       }
 
@@ -465,6 +630,7 @@ export class AgenticMemorySystem extends EventEmitter {
         totalEvents: episodicStats.totalEvents,
         byType: episodicStats.byType,
       },
+      graphMemory: this.graphMemory.getStats(this.config.workspaceId),
       consolidation: {
         lastRun: consolidationHistory[0]?.timestamp,
         totalConsolidations: consolidationHistory.length,
@@ -480,6 +646,9 @@ export class AgenticMemorySystem extends EventEmitter {
    * Initialize the memory system.
    */
   async initialize(): Promise<void> {
+    // Hydrate graph memory from persistence
+    await this.graphMemory.init(this.config.workspaceId);
+
     // Start consolidation if enabled
     if (this.config.consolidation.enabled) {
       this.startConsolidation();
@@ -578,11 +747,13 @@ export class AgenticMemorySystem extends EventEmitter {
     workingMemory: ReturnType<WorkingMemory['getState']>;
     semanticMemory: ReturnType<SemanticMemory['exportData']>;
     episodicMemory: ReturnType<EpisodicMemory['exportData']>;
+    graphMemory: ReturnType<GraphMemory['exportData']>;
   } {
     return {
       workingMemory: this.workingMemory.getState(),
       semanticMemory: this.semanticMemory.exportData(),
       episodicMemory: this.episodicMemory.exportData(),
+      graphMemory: this.graphMemory.exportData(),
     };
   }
 
@@ -593,6 +764,7 @@ export class AgenticMemorySystem extends EventEmitter {
     workingMemory?: ReturnType<WorkingMemory['getState']>;
     semanticMemory?: Parameters<SemanticMemory['importData']>[0];
     episodicMemory?: Parameters<EpisodicMemory['importData']>[0];
+    graphMemory?: Parameters<GraphMemory['importData']>[0];
   }): void {
     if (data.workingMemory) {
       this.workingMemory.restoreState(data.workingMemory);
@@ -602,6 +774,9 @@ export class AgenticMemorySystem extends EventEmitter {
     }
     if (data.episodicMemory) {
       this.episodicMemory.importData(data.episodicMemory);
+    }
+    if (data.graphMemory) {
+      this.graphMemory.importData(data.graphMemory);
     }
   }
 }

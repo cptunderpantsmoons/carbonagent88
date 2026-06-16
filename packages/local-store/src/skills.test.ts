@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
-import { initDatabase, closeDatabase, saveDatabase } from "./sqlite.js";
+import { initDatabase, closeDatabase, saveDatabase, CarbonDatabase } from "./sqlite.js";
 import {
   initSkillsTable,
   dbStoreSkill,
@@ -16,6 +16,12 @@ describe("local-store skills persistence", () => {
   beforeAll(async () => {
     await initDatabase(testDbPath);
     await initSkillsTable();
+    const db = new CarbonDatabase();
+    await db.createWorkspace({
+      id: "ws-skill-test",
+      name: "Skill Test",
+      vaultDir: "/tmp/v-skill",
+    });
   });
 
   afterAll(() => {

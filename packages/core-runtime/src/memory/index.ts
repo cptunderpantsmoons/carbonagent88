@@ -81,6 +81,9 @@ export {
   type GraphPath,
   type GraphSearchResult,
   type GraphStats,
+  type GraphPersistence,
+  type GraphMemoryOptions,
+  type GraphData,
 } from "./graph.js";
 
 // Agentic memory system (orchestrator)

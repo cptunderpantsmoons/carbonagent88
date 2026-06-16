@@ -68,6 +68,26 @@ export interface GraphStats {
 }
 
 // ---------------------------------------------------------------------------
+// Graph Persistence Interface
+// ---------------------------------------------------------------------------
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface GraphPersistence {
+  load(workspaceId: string): Promise<GraphData>;
+  save(workspaceId: string, nodes: GraphNode[], edges: GraphEdge[]): Promise<void>;
+  deleteNode(id: string): Promise<void>;
+  deleteEdge(id: string): Promise<void>;
+}
+
+export interface GraphMemoryOptions {
+  persistence?: GraphPersistence;
+}
+
+// ---------------------------------------------------------------------------
 // Graph Memory
 // ---------------------------------------------------------------------------
 
@@ -79,6 +99,48 @@ export class GraphMemory extends EventEmitter {
   private workspaceIndexes: Map<string, Set<string>> = new Map();
   private typeIndexes: Map<string, Set<string>> = new Map();
   private relationIndexes: Map<string, Set<string>> = new Map();
+  private persistence?: GraphPersistence;
+
+  constructor(options: GraphMemoryOptions = {}) {
+    super();
+    this.persistence = options.persistence;
+  }
+
+  /**
+   * Initialize the graph memory and optionally hydrate from persistence.
+   */
+  async init(workspaceId?: string): Promise<void> {
+    if (workspaceId) {
+      await this.loadForWorkspace(workspaceId);
+    }
+    this.emit("initialized");
+  }
+
+  /**
+   * Load persisted graph data for a workspace.
+   */
+  async loadForWorkspace(workspaceId: string): Promise<void> {
+    if (!this.persistence) return;
+    const data = await this.persistence.load(workspaceId);
+    // Only import nodes/edges belonging to the requested workspace to avoid
+    // cross-workspace pollution when the persisted store contains mixed data.
+    this.importData({
+      nodes: data.nodes.filter((n) => n.workspaceId === workspaceId),
+      edges: data.edges.filter((e) => e.workspaceId === workspaceId),
+    });
+    this.emit("loaded", { workspaceId });
+  }
+
+  /**
+   * Save in-memory graph data for a workspace to persistence.
+   */
+  async saveForWorkspace(workspaceId: string): Promise<void> {
+    if (!this.persistence) return;
+    const nodes = Array.from(this.nodes.values()).filter((n) => n.workspaceId === workspaceId);
+    const edges = Array.from(this.edges.values()).filter((e) => e.workspaceId === workspaceId);
+    await this.persistence.save(workspaceId, nodes, edges);
+    this.emit("saved", { workspaceId });
+  }
 
   // ---------------------------------------------------------------------------
   // Node Operations
@@ -95,6 +157,7 @@ export class GraphMemory extends EventEmitter {
       existing.mentionCount++;
       existing.properties = { ...existing.properties, ...node.properties };
       this.emit("node_updated", { node: existing });
+      void this.saveForWorkspace(existing.workspaceId);
       return existing;
     }
 
@@ -113,6 +176,7 @@ export class GraphMemory extends EventEmitter {
     this.addToTypeIndex(fullNode.entityType, fullNode.id);
 
     this.emit("node_added", { node: fullNode });
+    void this.saveForWorkspace(fullNode.workspaceId);
     return fullNode;
   }
 
@@ -163,6 +227,8 @@ export class GraphMemory extends EventEmitter {
     const node = this.nodes.get(id);
     if (!node) return false;
 
+    const workspaceId = node.workspaceId;
+
     // Delete all connected edges
     const edgeIds = this.adjacencyList.get(id) ?? new Set();
     for (const edgeId of edgeIds) {
@@ -184,6 +250,7 @@ export class GraphMemory extends EventEmitter {
     this.reverseAdjacency.delete(id);
 
     this.emit("node_deleted", { id });
+    void this.persistence?.deleteNode(id).then(() => this.saveForWorkspace(workspaceId));
     return true;
   }
 
@@ -207,6 +274,7 @@ export class GraphMemory extends EventEmitter {
       existingEdge.weight = Math.min(1, existingEdge.weight + 0.1);
       existingEdge.properties = { ...existingEdge.properties, ...edge.properties };
       this.emit("edge_updated", { edge: existingEdge });
+      void this.saveForWorkspace(existingEdge.workspaceId);
       return existingEdge;
     }
 
@@ -225,6 +293,7 @@ export class GraphMemory extends EventEmitter {
     this.addToRelationIndex(fullEdge.relationType, fullEdge.id);
 
     this.emit("edge_added", { edge: fullEdge });
+    void this.saveForWorkspace(fullEdge.workspaceId);
     return fullEdge;
   }
 
@@ -284,6 +353,7 @@ export class GraphMemory extends EventEmitter {
     this.edges.delete(id);
 
     this.emit("edge_deleted", { id });
+    void this.persistence?.deleteEdge(id).then(() => this.saveForWorkspace(edge.workspaceId));
     return true;
   }
 
@@ -583,6 +653,6 @@ export class GraphMemory extends EventEmitter {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createGraphMemory(): GraphMemory {
-  return new GraphMemory();
+export function createGraphMemory(options?: GraphMemoryOptions): GraphMemory {
+  return new GraphMemory(options);
 }

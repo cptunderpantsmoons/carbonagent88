@@ -89,6 +89,8 @@ export function closeDb(): void {
 
 function initTables(): void {
   if (!dbInstance) return;
+  // Enable foreign key enforcement for sql.js (off by default).
+  dbInstance.exec("PRAGMA foreign_keys = ON;");
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, vault_dir TEXT NOT NULL,
@@ -259,6 +261,7 @@ function initTables(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_graph_nodes_workspace ON memory_graph_nodes(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON memory_graph_nodes(entity_type);
+    CREATE INDEX IF NOT EXISTS idx_graph_nodes_workspace_type ON memory_graph_nodes(workspace_id, entity_type);
 
     -- Graph edges (relationships)
     CREATE TABLE IF NOT EXISTS memory_graph_edges (
@@ -275,6 +278,7 @@ function initTables(): void {
     CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON memory_graph_edges(source_id);
     CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON memory_graph_edges(target_id);
     CREATE INDEX IF NOT EXISTS idx_graph_edges_workspace ON memory_graph_edges(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_edges_source_target_relation ON memory_graph_edges(source_id, target_id, relation_type);
 
     -- BM25 inverted index
     CREATE TABLE IF NOT EXISTS bm25_index (
@@ -1433,6 +1437,192 @@ export class CarbonDatabase {
       "UPDATE tool_calls SET output = ?, completed_at = datetime('now') WHERE id = ?",
       [output, id],
     );
+  }
+
+  // ==================== GRAPH MEMORY ====================
+  async storeGraphNode(p: {
+    id: string;
+    workspaceId: string;
+    type: string;
+    label: string;
+    properties?: Record<string, unknown>;
+    embedding?: number[];
+    mentionCount?: number;
+  }): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO memory_graph_nodes (id, workspace_id, name, entity_type, properties_json, embedding_json, mention_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        p.id,
+        p.workspaceId,
+        p.label,
+        p.type,
+        JSON.stringify(p.properties ?? {}),
+        JSON.stringify(p.embedding ?? []),
+        p.mentionCount ?? 1,
+      ],
+    );
+  }
+
+  async getGraphNode(id: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM memory_graph_nodes WHERE id = ?", [id]);
+  }
+
+  async getGraphEdge(id: string): Promise<Record<string, unknown> | undefined> {
+    const db = await ensureDb();
+    return getRow(db, "SELECT * FROM memory_graph_edges WHERE id = ?", [id]);
+  }
+
+  async findGraphNodes(p: {
+    workspaceId: string;
+    type?: string;
+    label?: string;
+    limit?: number;
+  }): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    const conditions: string[] = ["workspace_id = ?"];
+    const params: unknown[] = [p.workspaceId];
+    if (p.type !== undefined) {
+      conditions.push("entity_type = ?");
+      params.push(p.type);
+    }
+    if (p.label !== undefined) {
+      conditions.push("name = ?");
+      params.push(p.label);
+    }
+    const sql = `SELECT * FROM memory_graph_nodes WHERE ${conditions.join(" AND ")} ORDER BY mention_count DESC${p.limit ? " LIMIT ?" : ""}`;
+    if (p.limit !== undefined) params.push(p.limit);
+    return getRows(db, sql, params);
+  }
+
+  async mergeGraphNode(p: {
+    id: string;
+    workspaceId: string;
+    type: string;
+    label: string;
+    properties?: Record<string, unknown>;
+    embedding?: number[];
+    mentionCount?: number;
+  }): Promise<void> {
+    const db = await ensureDb();
+    const existing = getRow(db, "SELECT id FROM memory_graph_nodes WHERE id = ?", [p.id]);
+    if (existing) {
+      const fields: string[] = ["created_at = created_at"];
+      const vals: unknown[] = [];
+      if (p.label !== undefined) {
+        fields.push("name = ?");
+        vals.push(p.label);
+      }
+      if (p.type !== undefined) {
+        fields.push("entity_type = ?");
+        vals.push(p.type);
+      }
+      if (p.properties !== undefined) {
+        fields.push("properties_json = ?");
+        vals.push(JSON.stringify(p.properties));
+      }
+      if (p.embedding !== undefined) {
+        fields.push("embedding_json = ?");
+        vals.push(JSON.stringify(p.embedding));
+      }
+      if (p.mentionCount !== undefined) {
+        fields.push("mention_count = ?");
+        vals.push(p.mentionCount);
+      }
+      vals.push(p.id);
+      runStmt(db, `UPDATE memory_graph_nodes SET ${fields.join(", ")} WHERE id = ?`, vals);
+    } else {
+      runStmt(
+        db,
+        `INSERT INTO memory_graph_nodes (id, workspace_id, name, entity_type, properties_json, embedding_json, mention_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          p.id,
+          p.workspaceId,
+          p.label,
+          p.type,
+          JSON.stringify(p.properties ?? {}),
+          JSON.stringify(p.embedding ?? []),
+          p.mentionCount ?? 1,
+        ],
+      );
+    }
+  }
+
+  async deleteGraphNode(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM memory_graph_nodes WHERE id = ?", [id]);
+  }
+
+  async storeGraphEdge(p: {
+    id: string;
+    sourceId: string;
+    targetId: string;
+    relationType: string;
+    workspaceId: string;
+    documentId?: string | null;
+    weight?: number;
+    properties?: Record<string, unknown>;
+  }): Promise<void> {
+    const db = await ensureDb();
+    runStmt(
+      db,
+      `INSERT INTO memory_graph_edges (id, workspace_id, source_id, target_id, relation_type, weight, properties_json, document_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        p.id,
+        p.workspaceId,
+        p.sourceId,
+        p.targetId,
+        p.relationType,
+        p.weight ?? 0.5,
+        JSON.stringify(p.properties ?? {}),
+        p.documentId ?? null,
+      ],
+    );
+  }
+
+  async findGraphEdges(p: {
+    workspaceId: string;
+    sourceId?: string;
+    targetId?: string;
+    relationType?: string;
+  }): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    const conditions: string[] = ["workspace_id = ?"];
+    const params: unknown[] = [p.workspaceId];
+    if (p.sourceId !== undefined) {
+      conditions.push("source_id = ?");
+      params.push(p.sourceId);
+    }
+    if (p.targetId !== undefined) {
+      conditions.push("target_id = ?");
+      params.push(p.targetId);
+    }
+    if (p.relationType !== undefined) {
+      conditions.push("relation_type = ?");
+      params.push(p.relationType);
+    }
+    const sql = `SELECT * FROM memory_graph_edges WHERE ${conditions.join(" AND ")} ORDER BY weight DESC`;
+    return getRows(db, sql, params);
+  }
+
+  async deleteGraphEdge(id: string): Promise<void> {
+    const db = await ensureDb();
+    runStmt(db, "DELETE FROM memory_graph_edges WHERE id = ?", [id]);
+  }
+
+  async listGraphNodes(workspaceId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM memory_graph_nodes WHERE workspace_id = ? ORDER BY mention_count DESC", [workspaceId]);
+  }
+
+  async listGraphEdges(workspaceId: string): Promise<Record<string, unknown>[]> {
+    const db = await ensureDb();
+    return getRows(db, "SELECT * FROM memory_graph_edges WHERE workspace_id = ? ORDER BY weight DESC", [workspaceId]);
   }
 }
 export { encrypt, decrypt } from "./crypto.js";
