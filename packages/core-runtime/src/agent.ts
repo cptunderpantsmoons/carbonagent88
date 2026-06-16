@@ -12,6 +12,7 @@
 import type { LLMProvider, ChatMessage, ToolDefinition } from "./gateway.js";
 import { createProvider } from "./gateway.js";
 import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
+import type { AgenticMemorySystem } from "./memory/system.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -199,6 +200,8 @@ export interface AgentRunConfig {
   model?: string;
   /** Bypass createProvider and use this LLM provider directly. */
   providerOverride?: LLMProvider;
+  /** Optional agentic memory system; if provided, memory tools use it. */
+  memory?: AgenticMemorySystem;
 }
 
 export interface AgentStep {
@@ -212,6 +215,7 @@ export class AgentRuntime {
   private provider: LLMProvider;
   private config: AgentRunConfig;
   private executor: ToolExecutor;
+  private memory?: AgenticMemorySystem;
   private history: ChatMessage[] = [];
   private steps: AgentStep[] = [];
   private cancelled = false;
@@ -223,6 +227,7 @@ export class AgentRuntime {
     this.provider = config.providerOverride ?? createProvider(config.providerConfig!);
     this.config = config;
     this.executor = executor;
+    this.memory = config.memory;
   }
 
   cancel(): void {
@@ -370,10 +375,20 @@ Always cite your sources when answering from retrieved documents.`;
         return this.executor.write_note(input as { title: string; content: string; workspaceId: string });
       case "delegate_task":
         return this.executor.delegate_task(input as { taskDescription: string; targetAgentRole: string; context?: string; workspaceId: string; maxSteps?: number });
-      case "memory_recall":
+      case "memory_recall": {
+        const { query, limit } = input as { query: string; workspaceId: string; limit?: number };
+        if (this.memory) {
+          return this.memory.recallMemory(query, limit ?? 5);
+        }
         return this.executor.memory_recall(input as { query: string; workspaceId: string; limit?: number });
-      case "memory_store":
+      }
+      case "memory_store": {
+        const { key, content } = input as { key: string; content: string; workspaceId: string; tags?: string[] };
+        if (this.memory) {
+          return this.memory.storeMemory(key, content, { source: "agent" });
+        }
         return this.executor.memory_store(input as { key: string; content: string; workspaceId: string; tags?: string[] });
+      }
       default: {
         const dynamic = this.executor as unknown as Record<string, ((input: Record<string, unknown>) => Promise<unknown>) | undefined>;
         const fn = dynamic[name];
