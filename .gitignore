@@ -1,12 +1,75 @@
+```markdown
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
+*.class
+*.exe
+*.dll
+*.so
+*.a
+*.out
+
+# Dependencies
+.venv/
+venv/
 node_modules/
+.mypy_cache/
+.pytest_cache/
 dist/
-release/
-*.tsbuildinfo
-.DS_Store
+build/
+target/
+.gradle/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.~*
+
+# Environment and system files
 .env
 .env.local
-*.log
-*.js
-*.js.map
-*.d.ts
-*.d.ts.map
+.env.*
+.DS_Store
+Thumbs.db
+*.env.*
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage and testing
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```
