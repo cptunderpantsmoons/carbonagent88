@@ -15,7 +15,7 @@
     "@carbon-agent/shared-schemas": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }
