@@ -44,7 +44,7 @@
     "node-global-key-listener": "^0.3.0",
     "screenshot-desktop": "^1.15.4",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.9"
   },
   "build": {
     "appId": "com.corporatecarbon.carbon-agent",
