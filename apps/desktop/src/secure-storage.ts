@@ -56,7 +56,14 @@ export class SecureStorage {
 export const secureStorage = new SecureStorage();
 
 const SESSION_PREFIX = "sess:";
-const sessionStore = new Map<string, string>();
+const SESSION_TTL_MS = 86_400_000; // 24 hours
+
+interface SessionEntry {
+  session: string;
+  expiresAt: number;
+}
+
+const sessionStore = new Map<string, SessionEntry>();
 
 export interface StoredSession {
   userId: string;
@@ -65,14 +72,25 @@ export interface StoredSession {
 }
 
 export function storeSession(token: string, session: StoredSession): void {
-  sessionStore.set(`${SESSION_PREFIX}${token}`, JSON.stringify(session));
+  sessionStore.set(`${SESSION_PREFIX}${token}`, {
+    session: JSON.stringify(session),
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  });
 }
 
 export function getSession(token: string): StoredSession | null {
-  const raw = sessionStore.get(`${SESSION_PREFIX}${token}`);
-  if (!raw) return null;
+  const key = `${SESSION_PREFIX}${token}`;
+  const entry = sessionStore.get(key);
+  if (!entry) return null;
+
+  // Check if session has expired
+  if (Date.now() > entry.expiresAt) {
+    sessionStore.delete(key);
+    return null;
+  }
+
   try {
-    return JSON.parse(raw) as StoredSession;
+    return JSON.parse(entry.session) as StoredSession;
   } catch {
     return null;
   }
@@ -86,4 +104,17 @@ export function listSessionKeys(): string[] {
   return Array.from(sessionStore.keys())
     .filter((k) => k.startsWith(SESSION_PREFIX))
     .map((k) => k.slice(SESSION_PREFIX.length));
+}
+
+/**
+ * Removes all expired sessions from the store.
+ * Should be called periodically (e.g., on app startup or via a timer).
+ */
+export function cleanupExpiredSessions(): void {
+  const now = Date.now();
+  for (const [key, entry] of sessionStore) {
+    if (now > entry.expiresAt) {
+      sessionStore.delete(key);
+    }
+  }
 }

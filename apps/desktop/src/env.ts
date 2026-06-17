@@ -134,3 +134,42 @@ export function buildConfig(env: Record<string, string>): CarbonConfig {
 
   return defaults;
 }
+
+/**
+ * Returns a sanitized config object that is safe to expose over IPC.
+ * NEVER includes API keys or other sensitive credentials.
+ */
+export function getSafeConfig(env: Record<string, string>): {
+  daemonMode: boolean;
+  trayEnabled: boolean;
+  hotkeyCapture: string;
+  hotkeyToggle: string;
+  screenCaptureIntervalMs: number;
+  screenCapturePrivacyMode: boolean;
+  telemetryEnabled: boolean;
+  logLevel: string;
+  dataDir: string;
+  hasOpenAiKey: boolean;
+  hasAnthropicKey: boolean;
+  hasCustomOpenAiKey: boolean;
+  customOpenAiBaseUrl?: string;
+  customOpenAiModel?: string;
+} {
+  const cfg = buildConfig(env);
+  return {
+    daemonMode: cfg.daemonMode,
+    trayEnabled: cfg.trayEnabled,
+    hotkeyCapture: cfg.hotkeyCapture,
+    hotkeyToggle: cfg.hotkeyToggle,
+    screenCaptureIntervalMs: cfg.screenCaptureIntervalMs,
+    screenCapturePrivacyMode: cfg.screenCapturePrivacyMode,
+    telemetryEnabled: cfg.telemetryEnabled,
+    logLevel: cfg.logLevel,
+    dataDir: cfg.dataDir,
+    hasOpenAiKey: Boolean(cfg.openaiApiKey),
+    hasAnthropicKey: Boolean(cfg.anthropicApiKey),
+    hasCustomOpenAiKey: Boolean(cfg.customOpenAiApiKey),
+    customOpenAiBaseUrl: cfg.customOpenAiBaseUrl,
+    customOpenAiModel: cfg.customOpenAiModel,
+  };
+}

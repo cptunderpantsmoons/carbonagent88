@@ -4,7 +4,7 @@
 
 Carbon Agent is a desktop application that autonomously collects and reasons over documents from authenticated browser sessions — including Outlook, SharePoint, Monday, Xero, and browser-based spreadsheets — then assembles structured working sets with provenance tracking for downstream deliverables (financial statements, dashboards, reports, and more).
 
-[![CI](https://github.com/psf/black/actions/workflows/ci.yml/badge.svg)](https://github.com/psf/black/actions/workflows/ci.yml)
+[![CI](https://github.com/cptunderpantsmoons/carbonagent88/actions/workflows/ci.yml/badge.svg)](https://github.com/cptunderpantsmoons/carbonagent88/actions/workflows/ci.yml)
 
 ---
 

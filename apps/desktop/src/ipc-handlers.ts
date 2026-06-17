@@ -29,6 +29,7 @@ import {
   dbGetModelRole,
   hasPermission,
   canAccessWorkspace,
+  getDocumentsDir,
   type ModelRoleName,
   type Permission,
   runStmt,
@@ -54,7 +55,7 @@ import { recordGeneratedDocument } from "./document-records.js";
 import { detectAllClis, detectCli } from "./cli-subagent.js";
 import { createScreenContextService } from "./screen-context.js";
 import { registerSingleHotkey, unregisterSingleHotkey } from "./hotkeys.js";
-import { buildConfig, loadEnv } from "./env.js";
+import { buildConfig, loadEnv, getSafeConfig } from "./env.js";
 
 let _db: CarbonDatabase | null = null;
 async function ensureDb(): Promise<CarbonDatabase> {
@@ -385,7 +386,12 @@ async function authorizeRequest(
   return { error: "Forbidden", code: "FORBIDDEN" };
 }
 
+const ALLOWED_TABLES = new Set(["ai_providers", "browser_profiles", "connectors", "watchers"]);
+
 async function stampOwnership(table: string, id: string, session: { userId: string; tenantId: string }): Promise<void> {
+  if (!ALLOWED_TABLES.has(table)) {
+    throw new Error(`Invalid table name in stampOwnership: ${table}`);
+  }
   try {
     const db = await ensureRawDb();
     runStmt(
@@ -949,7 +955,14 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         };
       }
       case "admin/tenant/members/remove": {
-        // Removing a tenant member is equivalent to deleting the user for this local-only phase.
+        // Verify the target user belongs to the same tenant before deleting
+        const targetUser = await d.getUserById(request.userId);
+        if (!targetUser) {
+          return { type: "error", error: "User not found", code: "NOT_FOUND" };
+        }
+        if (String(targetUser.tenant_id) !== session.tenantId) {
+          return { type: "error", error: "Cannot remove a user from a different tenant", code: "TENANT_MISMATCH" };
+        }
         await d.deleteUser(request.userId);
         return { type: "admin/tenant/members/remove.success" };
       }
@@ -1395,12 +1408,24 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "document/list.success", data: rows.map((row) => mapDocumentRow(row as Record<string, unknown>)) };
       }
       case "document/open": {
-        const error = await shell.openPath(request.filePath);
+        const documentsDir = getDocumentsDir();
+        const resolvedPath = path.resolve(request.filePath);
+        const normalizedDocsDir = path.resolve(documentsDir) + path.sep;
+        if (resolvedPath !== path.resolve(documentsDir) && !resolvedPath.startsWith(normalizedDocsDir)) {
+          return { type: "error", error: "Access denied: file outside allowed directory", code: "PATH_TRAVERSAL" };
+        }
+        const error = await shell.openPath(resolvedPath);
         if (error) return { type: "error", error, code: "OPEN_FAILED" };
         return { type: "document/open.success" };
       }
       case "document/reveal": {
-        shell.showItemInFolder(request.filePath);
+        const documentsDir = getDocumentsDir();
+        const resolvedPath = path.resolve(request.filePath);
+        const normalizedDocsDir = path.resolve(documentsDir) + path.sep;
+        if (resolvedPath !== path.resolve(documentsDir) && !resolvedPath.startsWith(normalizedDocsDir)) {
+          return { type: "error", error: "Access denied: file outside allowed directory", code: "PATH_TRAVERSAL" };
+        }
+        shell.showItemInFolder(resolvedPath);
         return { type: "document/reveal.success" };
       }
       case "skills/list": {
@@ -1668,8 +1693,12 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "connector/update.success", data: mapConnectorConfigRow(row as Record<string, unknown>) };
       }
       case "connector/delete": {
-        d.deleteConnectorConfig(request.id).catch(() => {});
-        return { type: "connector/delete.success" };
+        try {
+          await d.deleteConnectorConfig(request.id);
+          return { type: "connector/delete.success" };
+        } catch (err) {
+          return { type: "error", error: err instanceof Error ? err.message : String(err), code: "DELETE_FAILED" };
+        }
       }
       case "connector/sync": {
         const row = await d.getConnectorConfig(request.id);
@@ -1834,8 +1863,8 @@ ipcMain.handle("carbon-ipc", async (_event, rawRequest: unknown) => {
         return { type: "hotkey/unregister.success", data: { name } };
       }
       case "daemon/get-config": {
-        const cfg = buildConfig(loadEnv());
-        return { type: "daemon/get-config.success", data: { daemonMode: cfg.daemonMode, trayEnabled: cfg.trayEnabled, hotkeyCapture: cfg.hotkeyCapture, hotkeyToggle: cfg.hotkeyToggle, screenCaptureIntervalMs: cfg.screenCaptureIntervalMs, screenCapturePrivacyMode: cfg.screenCapturePrivacyMode } };
+        const safeCfg = getSafeConfig(loadEnv());
+        return { type: "daemon/get-config.success", data: safeCfg };
       }
 
       default:

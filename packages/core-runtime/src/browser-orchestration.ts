@@ -149,6 +149,64 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Validates a URL for browser navigation to prevent SSRF attacks.
+ * - Only allows http: and https: protocols
+ * - Blocks private/internal IP ranges unless CARBON_ALLOW_PRIVATE_NETWORKS is set
+ */
+function validateBrowserUrl(urlStr: string): { valid: boolean; error?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return { valid: false, error: `Invalid URL: ${urlStr}` };
+  }
+
+  // Only allow http and https protocols
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { valid: false, error: `Blocked protocol: ${parsed.protocol} — only http: and https: are allowed` };
+  }
+
+  // Allow private networks if explicitly enabled
+  if (process.env.CARBON_ALLOW_PRIVATE_NETWORKS === "true") {
+    return { valid: true };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Block localhost
+  if (hostname === "localhost" || hostname === "::1") {
+    return { valid: false, error: `Blocked: localhost is not allowed (set CARBON_ALLOW_PRIVATE_NETWORKS=true to override)` };
+  }
+
+  // Block loopback 127.x.x.x
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
+    return { valid: false, error: `Blocked: loopback address ${hostname} is not allowed (set CARBON_ALLOW_PRIVATE_NETWORKS=true to override)` };
+  }
+
+  // Block private IP ranges: 10.x.x.x, 192.168.x.x, 172.16-31.x.x
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
+    return { valid: false, error: `Blocked: private IP ${hostname} is not allowed (set CARBON_ALLOW_PRIVATE_NETWORKS=true to override)` };
+  }
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
+    return { valid: false, error: `Blocked: private IP ${hostname} is not allowed (set CARBON_ALLOW_PRIVATE_NETWORKS=true to override)` };
+  }
+  const match172 = hostname.match(/^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+  if (match172) {
+    const secondOctet = parseInt(match172[1], 10);
+    if (secondOctet >= 16 && secondOctet <= 31) {
+      return { valid: false, error: `Blocked: private IP ${hostname} is not allowed (set CARBON_ALLOW_PRIVATE_NETWORKS=true to override)` };
+    }
+  }
+
+  // Block 0.0.0.0
+  if (hostname === "0.0.0.0") {
+    return { valid: false, error: `Blocked: 0.0.0.0 is not allowed (set CARBON_ALLOW_PRIVATE_NETWORKS=true to override)` };
+  }
+
+  return { valid: true };
+}
+
 function emptyWorkingSet(sessionId: string): BrowserOrchestrationWorkingSet {
   return {
     sessionId,
@@ -272,6 +330,31 @@ async function collectWithBrowserTools(
         payload: { plan, correlationId, decision },
       }),
     );
+  }
+
+  // Validate URL to prevent SSRF before opening in browser
+  const urlValidation = validateBrowserUrl(url);
+  if (!urlValidation.valid) {
+    await Promise.resolve(
+      deps?.onEvent?.({
+        sessionId: input.sessionId,
+        role: "browser",
+        kind: "action_denied",
+        summary: `URL blocked: ${urlValidation.error}`,
+        payload: { plan: plan.summary, url, error: urlValidation.error },
+      }),
+    );
+    return {
+      summary: `${plan.summary}: URL blocked by security policy`,
+      source: plan.source,
+      query: plan.query,
+      observations: [],
+      documents: [],
+      metrics: [],
+      entities: [],
+      gaps: [`URL blocked: ${urlValidation.error}`],
+      provenanceScore: 0,
+    };
   }
 
   await browserTools.stealth_open({ profileId, url });

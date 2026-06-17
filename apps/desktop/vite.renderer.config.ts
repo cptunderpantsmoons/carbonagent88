@@ -4,6 +4,7 @@ import { resolve } from 'path';
 export default defineConfig({
   build: {
     outDir: 'dist/renderer',
+    sourcemap: 'hidden',
     emptyOutDir: false, // don't wipe styles, index.html etc
     rollupOptions: {
       input: {

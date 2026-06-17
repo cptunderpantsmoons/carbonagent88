@@ -31,6 +31,14 @@ export function parseFile(
 ): ParsedDocument {
   const ext = path.extname(filePath).toLowerCase();
   const basename = path.basename(filePath);
+
+  // Enforce a maximum file size to prevent OOM on large files
+  const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+  const stat = fs.statSync(filePath);
+  if (stat.size > MAX_FILE_SIZE) {
+    throw new Error(`File too large: ${basename} is ${stat.size} bytes (max ${MAX_FILE_SIZE} bytes / 50MB)`);
+  }
+
   const buffer = fs.readFileSync(filePath);
 
   switch (ext) {
@@ -379,7 +387,8 @@ export async function searchChunks(
   limit = 5,
 ): Promise<StoredChunk[]> {
   const db = await ensureEmbedDb();
-  const embedder = new HashEmbeddingProvider(8);
+  // Use the same embedding provider as stored chunks to ensure matching dimensionality.
+  const embedder = await getEmbeddingProvider();
   const [queryEmbedding] = await embedder.embed([query]);
 
   const stmt = db.prepare("SELECT * FROM chunks WHERE workspace_id = ?");

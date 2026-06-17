@@ -133,8 +133,9 @@ export class RestConnector implements ConnectorAdapter {
       ...(opts.headers ?? {}),
     };
 
-    // Auth
-    const credential = opts.credential ?? config.credentialsEncrypted ?? null;
+    // Auth — only use opts.credential (which should be decrypted by the caller).
+    // Do NOT fall back to config.credentialsEncrypted (which is the raw encrypted blob).
+    const credential = opts.credential ?? null;
     if (opts.authType === "bearer" && credential) {
       headers["Authorization"] = `Bearer ${credential}`;
     } else if (opts.authType === "basic" && credential) {

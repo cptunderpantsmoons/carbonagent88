@@ -16,12 +16,13 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
+  "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=22.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "acorn": "latest",
+    "acorn": "^8.14.0",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
     "typescript-eslint": "^8.60.1"

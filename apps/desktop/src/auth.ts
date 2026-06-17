@@ -6,6 +6,10 @@ import { storeSession, getSession, deleteSession } from "./secure-storage.js";
 const SALT_ROUNDS = 12;
 const SESSION_NS = "session:";
 
+// Dummy hash used to ensure bcrypt.compare always runs, preventing timing attacks
+// that could reveal whether an email exists in the database.
+const DUMMY_HASH = "$2a$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTUV1234567890abcdefghijklmnopqrstuv";
+
 export interface SessionPayload {
   userId: string;
   tenantId: string;
@@ -73,10 +77,21 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
 export async function login(email: string, password: string): Promise<{ token: string; session: SessionPayload } | null> {
   const db = getDb();
   const row = await db.getUserByEmail(email);
+
+  // Always run bcrypt.compare to prevent timing attacks that reveal whether
+  // an email is registered. If the user doesn't exist, compare against DUMMY_HASH.
+  const hash = row?.password_hash ?? DUMMY_HASH;
+  if (typeof hash !== "string" || hash.length === 0) {
+    // Run a dummy comparison to normalize timing even when hash is missing
+    await verifyPassword(password, DUMMY_HASH);
+    return null;
+  }
+  const passwordValid = await verifyPassword(password, hash);
+
+  // Now check if the user actually exists and is active
   if (!row || !row.active) return null;
-  const hash = row.password_hash;
-  if (!hash || typeof hash !== "string") return null;
-  if (!(await verifyPassword(password, hash))) return null;
+  if (!passwordValid) return null;
+
   return createSession(String(row.id));
 }
 

@@ -16,9 +16,10 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  lint-and-test:
-    name: Lint & Test
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,12 +44,72 @@ jobs:
       - name: Typecheck all workspaces
         run: pnpm -r typecheck
 
-      - name: Test all workspaces
-        run: pnpm -r test
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test all workspaces (with coverage)
+        run: pnpm -r test -- --coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            **/coverage/
+            **/coverage.json
+          if-no-files-found: ignore
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm audit
+        run: pnpm audit --audit-level=high
+        continue-on-error: true
 
   build-desktop:
     name: Build Desktop
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: [lint, test]
     strategy:
       fail-fast: false
       matrix:
@@ -105,12 +166,65 @@ jobs:
             apps/desktop/release/*.snap
           if-no-files-found: ignore
 
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build-desktop]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: pnpm -r build
+
+      - name: Install Playwright browsers
+        run: |
+          cd apps/desktop
+          pnpm e2e:install
+        shell: bash
+
+      - name: Run E2E tests (xvfb)
+        run: |
+          cd apps/desktop
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" pnpm e2e
+        shell: bash
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            apps/desktop/test-results/
+            apps/desktop/playwright-report/
+          if-no-files-found: ignore
+
   release-desktop:
     name: Release Desktop
     if: github.event_name == 'release'
-    needs: [lint-and-test, build-desktop]
+    needs: [lint, test, security-audit, build-desktop, e2e]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -121,9 +235,17 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum * > checksums-sha256.txt
+          cat checksums-sha256.txt
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            artifacts/*
+            artifacts/checksums-sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

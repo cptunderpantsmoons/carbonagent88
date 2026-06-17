@@ -15,14 +15,15 @@ import {
   type ApprovalCoordinator,
 } from "@carbon-agent/core-runtime";
 import type { LLMProvider } from "@carbon-agent/core-runtime";
-import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, hashEmbed, dbGetModelRole, listUserPermissions } from "@carbon-agent/local-store";
+import { CarbonDatabase, createRunLog, getVaultDir, dbStoreMemory, dbRecallMemories, dbStoreSkill, dbListSkills, hashEmbed, dbGetModelRole, listUserPermissions, isPathSafeForVault } from "@carbon-agent/local-store";
 import type { SessionPayload } from "./auth.js";
 import type { ModelRoleName } from "@carbon-agent/local-store";
 import { parseFile, chunkText, storeChunks, searchChunks, getEmbeddingProvider } from "@carbon-agent/ingestion";
 import { generateDocument } from "./document-generator.js";
-import { stealthOpen, stealthScrape, stealthDownload } from "@carbon-agent/cloak-bridge";
+import { stealthOpen, stealthScrape, stealthDownload, getLockedContext } from "@carbon-agent/cloak-bridge";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { emitAgentTopology, emitVaultChange } from "./desktop-events.js";
 import { emitSessionEvent, emitSessionUpdate, emitSessionWorkingSet } from "./session-events.js";
 import { recordGeneratedDocument } from "./document-records.js";
@@ -153,11 +154,122 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const abortController = new AbortController();
 
   const executor: ToolExecutor = {
-    stealth_interact: async () => ({ success: true } as unknown),
-    stealth_screenshot: async () => ({ success: true } as unknown),
-    stealth_evaluate: async () => ({ success: true } as unknown),
-    stealth_axtree: async () => ({ success: true } as unknown),
-    graph_query: async () => ({ success: true, nodes: [], edges: [] } as unknown),
+    stealth_interact: async (payload: Record<string, unknown>) => {
+      // Interact with a page: click, type, scroll, etc.
+      const profileId = (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "";
+      const url = payload.url as string | undefined;
+      const action = payload.action as string;
+      const selector = payload.selector as string | undefined;
+      const text = payload.text as string | undefined;
+
+      const context = getLockedContext(profileId);
+      if (!context) {
+        throw new Error(`Profile ${profileId} is not locked. Lock it before using stealth tools.`);
+      }
+      const page = context.pages()[0];
+      if (!page) {
+        throw new Error("No active page in profile context");
+      }
+      if (url && page.url() !== url) {
+        await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+      }
+
+      switch (action) {
+        case "click":
+          if (selector) await page.click(selector, { timeout: 10000 });
+          break;
+        case "type":
+          if (selector && text) await page.fill(selector, text, { timeout: 10000 });
+          break;
+        case "scroll":
+          await page.evaluate((scrollY: number) => window.scrollBy(0, scrollY), (payload.scrollY as number) ?? 500);
+          break;
+        case "press":
+          if (selector) await page.focus(selector);
+          await page.keyboard.press((payload.key as string) ?? "Enter");
+          break;
+        case "wait":
+          await page.waitForTimeout((payload.ms as number) ?? 1000);
+          break;
+        default:
+          throw new Error(`Unknown interaction action: ${action}`);
+      }
+
+      return { success: true, action, url: page.url(), title: await page.title() };
+    },
+    stealth_screenshot: async (payload: Record<string, unknown>) => {
+      const profileId = (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "";
+      const url = payload.url as string | undefined;
+
+      const context = getLockedContext(profileId);
+      if (!context) {
+        throw new Error(`Profile ${profileId} is not locked. Lock it before using stealth tools.`);
+      }
+      const page = context.pages()[0];
+      if (!page) {
+        throw new Error("No active page in profile context");
+      }
+      if (url && page.url() !== url) {
+        await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+      }
+
+      const screenshotBuffer = await page.screenshot({ fullPage: true, type: "png" });
+      const docsDir = path.join(os.homedir(), ".carbon-agent", "screenshots");
+      if (!fs.existsSync(docsDir)) fs.mkdirSync(docsDir, { recursive: true });
+      const screenshotPath = path.join(docsDir, `screenshot-${Date.now()}.png`);
+      fs.writeFileSync(screenshotPath, screenshotBuffer);
+
+      return { success: true, filePath: screenshotPath, url: page.url(), title: await page.title() };
+    },
+    stealth_evaluate: async (payload: Record<string, unknown>) => {
+      const profileId = (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "";
+      const url = payload.url as string;
+      const script = payload.script as string;
+
+      // Script validation: reject scripts that use eval() or Function() with untrusted data
+      if (/\beval\s*\(/.test(script) || /new\s+Function\s*\(/.test(script)) {
+        throw new Error("Script validation failed: eval() and new Function() are not allowed for security reasons.");
+      }
+
+      const context = getLockedContext(profileId);
+      if (!context) {
+        throw new Error(`Profile ${profileId} is not locked. Lock it before using stealth tools.`);
+      }
+      const page = context.pages()[0];
+      if (!page) {
+        throw new Error("No active page in profile context");
+      }
+      if (url && page.url() !== url) {
+        await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+      }
+
+      const result = await page.evaluate(script);
+      return { success: true, result };
+    },
+    stealth_axtree: async (payload: Record<string, unknown>) => {
+      const profileId = (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "";
+
+      const context = getLockedContext(profileId);
+      if (!context) {
+        throw new Error(`Profile ${profileId} is not locked. Lock it before using stealth tools.`);
+      }
+      const page = context.pages()[0];
+      if (!page) {
+        throw new Error("No active page in profile context");
+      }
+
+      // Build an accessibility tree snapshot using Playwright's accessibility API
+      const snapshot = await page.accessibility.snapshot();
+      return { success: true, tree: snapshot };
+    },
+    graph_query: async (payload: Record<string, unknown>) => {
+      const wsId = payload.workspaceId as string;
+      const query = payload.query as string;
+      // Query graph memory via db methods
+      const nodes = await db.findGraphNodes({ workspaceId: wsId, label: query, limit: 20 });
+      const edges = await db.findGraphEdges({ workspaceId: wsId });
+      return { success: true, nodes, edges };
+    },
     generate_document: async (payload: Record<string, unknown>) => {
       const result = await generateDocument({
         workspaceId: payload.workspaceId as string,
@@ -174,11 +286,133 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       });
       return result as unknown;
     },
-    recall_skill: async () => ({ success: true } as unknown),
-    store_skill: async () => ({ success: true } as unknown),
-    vault_read: async () => ({ success: true } as unknown),
-    vault_write: async () => ({ success: true } as unknown),
-    vault_link: async () => ({ success: true } as unknown),
+    recall_skill: async (payload: Record<string, unknown>) => {
+      const skillId = payload.skillId as string;
+      if (skillId) {
+        // Retrieve a specific skill by ID
+        const skills = await dbListSkills(workspaceId);
+        const skill = skills.find((s) => s.id === skillId);
+        if (!skill) {
+          return { success: false, error: `Skill not found: ${skillId}` };
+        }
+        return {
+          success: true,
+          skill: {
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            toolSequence: JSON.parse(skill.tool_sequence_json),
+          },
+        };
+      }
+      // List all skills for the workspace
+      const skills = await dbListSkills(workspaceId);
+      return {
+        success: true,
+        skills: skills.map((s) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          trigger: s.trigger,
+          successCount: s.success_count,
+        })),
+      };
+    },
+    store_skill: async (payload: Record<string, unknown>) => {
+      const skillName = payload.name as string;
+      const trigger = payload.trigger as string;
+      const definition = payload.definition as string;
+      const skillId = crypto.randomUUID();
+      const triggerEmbedding = hashEmbed(trigger);
+      await dbStoreSkill({
+        id: skillId,
+        workspaceId,
+        trigger,
+        triggerEmbedding,
+        name: skillName,
+        description: definition,
+        toolSequence: [{ toolName: "manual", input: { definition }, notes: "User-defined skill" }],
+      });
+      return { success: true, id: skillId, name: skillName };
+    },
+    vault_read: async (payload: Record<string, unknown>) => {
+      const vaultId = payload.vaultId as string;
+      const filePath = payload.path as string;
+
+      const vaultDir = getVaultDir(vaultId);
+      // Path validation: resolve and ensure the path stays within the vault directory
+      const resolvedPath = path.resolve(vaultDir, filePath);
+      const relativePath = path.relative(vaultDir, resolvedPath);
+      if (relativePath.startsWith("..") || path.isAbsolute(filePath)) {
+        throw new Error(`Path traversal detected: ${filePath} is outside the vault directory`);
+      }
+      if (!isPathSafeForVault(resolvedPath)) {
+        throw new Error(`Path is not safe for vault access: ${filePath}`);
+      }
+      if (!fs.existsSync(resolvedPath)) {
+        return { success: false, error: `File not found: ${filePath}` };
+      }
+      const content = fs.readFileSync(resolvedPath, "utf-8");
+      return { success: true, content, path: filePath };
+    },
+    vault_write: async (payload: Record<string, unknown>) => {
+      const vaultId = payload.vaultId as string;
+      const filePath = payload.path as string;
+      const content = payload.content as string;
+
+      const vaultDir = getVaultDir(vaultId);
+      if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
+
+      // Path validation: resolve and ensure the path stays within the vault directory
+      const resolvedPath = path.resolve(vaultDir, filePath);
+      const relativePath = path.relative(vaultDir, resolvedPath);
+      if (relativePath.startsWith("..") || path.isAbsolute(filePath)) {
+        throw new Error(`Path traversal detected: ${filePath} is outside the vault directory`);
+      }
+      if (!isPathSafeForVault(resolvedPath)) {
+        throw new Error(`Path is not safe for vault access: ${filePath}`);
+      }
+
+      // Ensure parent directory exists
+      const parentDir = path.dirname(resolvedPath);
+      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+
+      fs.writeFileSync(resolvedPath, content);
+      emitVaultChange({ workspaceId: vaultId, filePath: relativePath.split(path.sep).join("/"), content });
+      return { success: true, path: filePath };
+    },
+    vault_link: async (payload: Record<string, unknown>) => {
+      const vaultId = payload.vaultId as string;
+      const sourcePath = payload.sourcePath as string;
+      const targetPath = payload.targetPath as string;
+
+      const vaultDir = getVaultDir(vaultId);
+      if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
+
+      // Path validation for both source and target
+      const resolvedSource = path.resolve(vaultDir, sourcePath);
+      const resolvedTarget = path.resolve(vaultDir, targetPath);
+      const relSource = path.relative(vaultDir, resolvedSource);
+      const relTarget = path.relative(vaultDir, resolvedTarget);
+      if (relSource.startsWith("..") || relTarget.startsWith("..") || path.isAbsolute(sourcePath) || path.isAbsolute(targetPath)) {
+        throw new Error(`Path traversal detected: source or target is outside the vault directory`);
+      }
+      if (!isPathSafeForVault(resolvedSource) || !isPathSafeForVault(resolvedTarget)) {
+        throw new Error(`Path is not safe for vault access`);
+      }
+
+      // Ensure source exists
+      if (!fs.existsSync(resolvedSource)) {
+        return { success: false, error: `Source file not found: ${sourcePath}` };
+      }
+
+      // Ensure parent directory of target exists
+      const targetParentDir = path.dirname(resolvedTarget);
+      if (!fs.existsSync(targetParentDir)) fs.mkdirSync(targetParentDir, { recursive: true });
+
+      fs.symlinkSync(resolvedSource, resolvedTarget);
+      return { success: true, sourcePath, targetPath };
+    },
     stealth_open: async (payload: Record<string, unknown>) => stealthOpen({ profileId: (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "", url: payload.url as string }),
     stealth_scrape: async (payload: Record<string, unknown>) => stealthScrape({ profileId: (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "", url: payload.url as string }),
     stealth_download: async (payload: Record<string, unknown>) => stealthDownload({ profileId: (payload.profileId as string | undefined) ?? input.defaultProfileId ?? "", url: payload.url as string, filename: payload.filename as string }),

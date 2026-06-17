@@ -149,12 +149,9 @@ export async function hasPermission(
   const perms = await listUserPermissions(db, userId, opts?.workspaceId);
   if (perms.includes(permission)) return true;
 
-  // If workspace scoped, also allow admin with workspace:write to perform all workspace resource mutations
-  if (opts?.workspaceId && perms.includes("workspace:write")) return true;
-
-  // Super admin bootstrap
+  // Admin can do everything — but ONLY within their own tenant
   const role = await db.getRole(String(user.role_id ?? ""));
-  if (role && role.name === "admin") return true;
+  if (role && role.name === "admin" && (!opts?.tenantId || String(user.tenant_id) === opts.tenantId)) return true;
 
   return false;
 }

@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { AIProviderConfig } from "@carbon-agent/shared-schemas";
 import type { ChatRequest, ChatResponse, StreamChunk, LLMProvider } from "../gateway.js";
+import { withRetry } from "./retry.js";
 
 /**
  * OpenAI Provider
@@ -21,23 +22,26 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const response = await this.client.chat.completions.create({
-      model: request.model,
-      messages: request.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
-      tools: request.tools?.map((t) => ({
-        type: "function" as const,
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.inputSchema,
-        },
-      })),
-      max_tokens: request.maxTokens,
-      temperature: request.temperature,
-    });
+    const response = await withRetry((signal) =>
+      this.client.chat.completions.create({
+        model: request.model,
+        messages: request.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        tools: request.tools?.map((t) => ({
+          type: "function" as const,
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.inputSchema,
+          },
+        })),
+        max_tokens: request.maxTokens,
+        temperature: request.temperature,
+        ...(signal ? { signal } : {}),
+      }),
+    );
 
     const choice = response.choices[0];
     const message = choice?.message;

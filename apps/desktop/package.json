@@ -58,8 +58,7 @@
       "src/renderer/**/*",
       "assets/**/*",
       "build/**/*",
-      "package.json",
-      "node_modules/**/*"
+      "package.json"
     ],
     "asarUnpack": [
       "node_modules/sql.js/dist/*.wasm"
@@ -87,12 +86,12 @@
       ],
       "icon": "assets/icon.ico",
       "artifactName": "${productName}-${version}-win-${arch}.${ext}",
-      "verifyUpdateCodeSignature": false
+      "verifyUpdateCodeSignature": true
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowElevation": true,
+      "allowElevation": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
@@ -124,6 +123,11 @@
       "icon": "assets/icon.png",
       "category": "Office"
     },
-    "publish": null
+    "publish": {
+      "provider": "github",
+      "owner": "cptunderpantsmoons",
+      "repo": "carbonagent88"
+    },
+    "afterSign": "./scripts/notarize.js"
   }
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, powerMonitor } from "electron";
+import { app, BrowserWindow, powerMonitor, session } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WatcherManager } from "./watcher-manager.js";
@@ -9,6 +9,7 @@ import { createTray, destroyTray } from "./tray.js";
 import { registerHotkeys, unregisterAllHotkeys } from "./hotkeys.js";
 import { createScreenContextService } from "./screen-context.js";
 import { loadEnv, buildConfig } from "./env.js";
+import { closeDb, saveDatabase } from "@carbon-agent/local-store";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +19,33 @@ let isQuitting = false;
 function createWindow(): void {
   mainWindow = new BrowserWindow({ width: 1400, height: 900, webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   setMainWindow(mainWindow);
+
+  // CSP header: restrict all resource loading to 'self' to prevent XSS and data exfiltration
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'",
+        ],
+      },
+    });
+  });
+
+  // Navigation guard: prevent the renderer from navigating away from the app
+  mainWindow.webContents.on("will-navigate", (e, url) => {
+    if (url !== mainWindow!.webContents.getURL()) {
+      e.preventDefault();
+    }
+  });
+
+  // Disable DevTools in packaged builds
+  if (app.isPackaged) {
+    mainWindow.webContents.on("devtools-opened", () => {
+      mainWindow!.webContents.closeDevTools();
+    });
+  }
+
   mainWindow.on("closed", () => {
     if (mainWindow === null) return;
     mainWindow = null;
@@ -109,8 +137,32 @@ app.on("before-quit", async () => {
   isQuitting = true;
   unregisterAllHotkeys();
   destroyTray();
+  // Save the in-memory SQLite database to disk before quitting.
+  try {
+    closeDb();
+  } catch (e) {
+    console.error("[main] Failed to save database on quit", e);
+  }
   const { closeAllBrowsers } = await import("@carbon-agent/cloak-bridge");
   await closeAllBrowsers();
+});
+
+// Ensure database is saved on process exit or interrupt signals.
+process.on("exit", () => {
+  try {
+    saveDatabase();
+  } catch (e) {
+    console.error("[main] Failed to save database on process exit", e);
+  }
+});
+
+process.on("SIGINT", () => {
+  try {
+    saveDatabase();
+  } catch (e) {
+    console.error("[main] Failed to save database on SIGINT", e);
+  }
+  process.exit(0);
 });
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

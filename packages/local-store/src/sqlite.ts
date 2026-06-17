@@ -2,6 +2,8 @@ import initSqlJs from "sql.js";
 import type { Database, SqlJsStatic } from "sql.js";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
 import { createRequire } from "node:module";
 import { getDatabasePath } from "./paths.js";
 import { fileURLToPath } from "node:url";
@@ -50,10 +52,132 @@ function loadOrCreateDb(): Database {
     fs.mkdirSync(dir, { recursive: true });
   }
   if (fs.existsSync(dbFile)) {
-    const buffer = fs.readFileSync(dbFile);
-    return new sqlJs!.Database(buffer as Uint8Array);
+    try {
+      const buffer = fs.readFileSync(dbFile);
+      return new sqlJs!.Database(buffer as Uint8Array);
+    } catch (err) {
+      console.error(`[sqlite] Failed to open database at ${dbFile}:`, err);
+      // Health check: try restoring from latest backup
+      const restored = restoreFromBackup();
+      if (restored) {
+        console.log("[sqlite] Successfully restored database from backup");
+        const buffer = fs.readFileSync(dbFile);
+        return new sqlJs!.Database(buffer as Uint8Array);
+      }
+      console.warn("[sqlite] No backup available, starting with empty database");
+      return new sqlJs!.Database();
+    }
   }
   return new sqlJs!.Database();
+}
+
+/**
+ * Backup the current database to a timestamped .bak file.
+ * Keeps the last 7 daily backups; older ones are pruned.
+ * Should be called on startup and periodically.
+ */
+export function backupDatabase(): void {
+  const dbFile = currentDbPath;
+  if (!fs.existsSync(dbFile)) return;
+
+  const dir = path.dirname(dbFile);
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const backupPath = path.join(dir, `carbon.db.${dateStr}.bak`);
+
+  // Don't create duplicate backups for the same day
+  if (fs.existsSync(backupPath)) return;
+
+  try {
+    // Flush in-memory state to disk first so backup is current
+    if (dbInstance) {
+      saveDb(dbInstance);
+    }
+    fs.copyFileSync(dbFile, backupPath);
+    console.log(`[sqlite] Database backed up to ${backupPath}`);
+  } catch (err) {
+    console.error(`[sqlite] Backup failed:`, err);
+    return;
+  }
+
+  // Prune old backups — keep last 7 daily backups
+  pruneOldBackups(dir);
+}
+
+/**
+ * Prune backup files older than 7 days in the database directory.
+ * Only deletes files matching the carbon.db.YYYYMMDD.bak pattern.
+ */
+function pruneOldBackups(dir: string): void {
+  const backupPattern = /^carbon\.db\.\d{8}\.bak$/;
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter((f) => backupPattern.test(f));
+  } catch {
+    return;
+  }
+
+  // Sort by filename (YYYYMMDD sorts chronologically)
+  files.sort().reverse();
+
+  // Keep the 7 most recent, delete the rest
+  const toDelete = files.slice(7);
+  for (const file of toDelete) {
+    try {
+      fs.unlinkSync(path.join(dir, file));
+      console.log(`[sqlite] Pruned old backup: ${file}`);
+    } catch (err) {
+      console.warn(`[sqlite] Failed to prune backup ${file}:`, err);
+    }
+  }
+}
+
+/**
+ * Attempt to restore the database from the most recent backup file.
+ * Returns true if restoration succeeded, false otherwise.
+ */
+function restoreFromBackup(): boolean {
+  const dbFile = currentDbPath;
+  const dir = path.dirname(dbFile);
+  const backupPattern = /^carbon\.db\.\d{8}\.bak$/;
+
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter((f) => backupPattern.test(f));
+  } catch {
+    return false;
+  }
+
+  if (files.length === 0) return false;
+
+  // Sort by date descending (most recent first)
+  files.sort().reverse();
+
+  for (const backupFile of files) {
+    const backupPath = path.join(dir, backupFile);
+    try {
+      // Verify the backup is a valid SQLite file by checking the header
+      const header = Buffer.alloc(16);
+      const fd = fs.openSync(backupPath, "r");
+      fs.readSync(fd, header, 0, 16, 0);
+      fs.closeSync(fd);
+
+      // SQLite database file header magic string
+      if (header.toString("utf8", 0, 15) !== "SQLite format 3") {
+        console.warn(`[sqlite] Backup ${backupFile} is not a valid SQLite file, skipping`);
+        continue;
+      }
+
+      fs.copyFileSync(backupPath, dbFile);
+      console.log(`[sqlite] Restored database from ${backupFile}`);
+      return true;
+    } catch (err) {
+      console.warn(`[sqlite] Failed to restore from ${backupFile}:`, err);
+      continue;
+    }
+  }
+
+  return false;
 }
 
 function saveDb(db: Database): void {
@@ -65,6 +189,8 @@ export async function ensureDb(): Promise<Database> {
   if (!sqlJs) {
     await initEngine();
     dbInstance = loadOrCreateDb();
+    // Create a daily backup on startup for data resilience
+    backupDatabase();
   }
   if (!dbInstance) {
     throw new Error("Database not initialized");
@@ -78,7 +204,24 @@ export function flushDb(): void {
   }
 }
 
+// --- Debounced auto-flush mechanism ---
+// Prevents data loss by periodically writing the in-memory DB to disk.
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleFlush(): void {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => {
+    flushDb();
+    flushTimer = null;
+  }, 500);
+}
+
 export function closeDb(): void {
+  // Cancel any pending debounced flush and flush immediately
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
   flushDb();
   if (dbInstance) {
     dbInstance.close();
@@ -594,6 +737,8 @@ export async function initDatabase(filePath?: string): Promise<void> {
   await initEngine();
   dbInstance = loadOrCreateDb();
   initTables();
+  // Create a daily backup on startup for data resilience
+  backupDatabase();
 }
 
 /** Save current in-memory database to disk (flush). */
@@ -650,6 +795,8 @@ export function runStmt(
   stmt.bind(bindParams(params));
   stmt.step();
   stmt.free();
+  // Schedule a debounced flush so write operations are persisted to disk.
+  scheduleFlush();
 }
 
 function coerce<T>(value: unknown): T {
@@ -1130,7 +1277,7 @@ export class CarbonDatabase {
     const db = await ensureDb();
     runStmt(
       db,
-      "UPDATE watchers SET last_run = ?, updated_at = datetime('now') WHERE id = ?",
+      "UPDATE watchers SET last_run_at = ?, updated_at = datetime('now') WHERE id = ?",
       [new Date().toISOString(), id],
     );
   }
@@ -1152,7 +1299,7 @@ export class CarbonDatabase {
 
   async countRunningRuns() {
     const db = await ensureDb();
-    const row = getRow(db, "SELECT COUNT(*) as count FROM agents", []);
+    const row = getRow(db, "SELECT COUNT(*) as count FROM runs WHERE status = 'running'", []);
     return Number(row?.count ?? 0);
   }
 
@@ -2203,11 +2350,18 @@ export class CarbonDatabase {
     const adminRoleId = DEFAULT_ROLES.admin;
     const adminUser = getRow(db, "SELECT * FROM users WHERE id = ?", [DEFAULT_ADMIN]);
     if (!adminUser) {
+      // Generate a random temporary password instead of storing null.
+      const tempPassword = crypto.randomBytes(16).toString("hex");
+      const tempHash = bcrypt.hashSync(tempPassword, 12);
       runStmt(
         db,
         "INSERT INTO users (id, tenant_id, email, name, password_hash, role_id, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-        [DEFAULT_ADMIN, DEFAULT_TENANT, "admin@local", "Default Admin", null, adminRoleId, 1],
+        [DEFAULT_ADMIN, DEFAULT_TENANT, "admin@local", "Default Admin", tempHash, adminRoleId, 1],
       );
+      // Log the temporary password once so the operator can retrieve it.
+      // The password must be changed on first login (indicated by the naming convention).
+      console.log(`[DB] Default admin created with temporary password: ${tempPassword}`);
+      console.log(`[DB] WARNING: The default admin password must be changed on first login.`);
     }
 
     // Ensure the default admin is a tenant member with admin role
