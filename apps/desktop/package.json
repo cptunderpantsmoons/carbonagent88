@@ -39,7 +39,7 @@
     "@types/node": "^25.9.1",
     "active-win": "^9.0.0",
     "bcryptjs": "^3.0.3",
-    "electron": "^42.4.0",
+    "electron": "^42.4.1",
     "electron-builder": "^26.15.2",
     "node-global-key-listener": "^0.3.0",
     "screenshot-desktop": "^1.15.4",
