@@ -176,8 +176,8 @@ importers:
         specifier: ^2.17.2
         version: 2.17.2
       protobufjs:
-        specifier: ^8.6.2
-        version: 8.6.2
+        specifier: ^8.6.4
+        version: 8.6.4
       sql.js:
         specifier: ^1.14.1
         version: 1.14.1
@@ -2268,8 +2268,8 @@ packages:
     resolution: {integrity: sha512-k8BHqgPBOtrlougZZqF2uUk5Z7bN8f0wj+3e8M3hvtSv0NBAz4VBy5f6R5Nxq/l+i7mRFTgNZb2trxqTpHNY/A==}
     hasBin: true
 
-  protobufjs@8.6.2:
-    resolution: {integrity: sha512-CCERJxzRvKMeEdJSLwdQf40TXWNPc8M4RkN7j/lxY6FQB+4do8rETWqj60AqxP9n0XIsxnSefZ8uhAaGKg2njw==}
+  protobufjs@8.6.4:
+    resolution: {integrity: sha512-/+XMv9JalknuncEJSwsyEVlwcxVLKx2iaoSUXFZA86MJkdqyOdfrlB1sB7S6aKyUk9tl20YY+SgQe5J2sJHTcg==}
     engines: {node: '>=12.0.0'}
 
   pump@3.0.4:
@@ -5089,7 +5089,7 @@ snapshots:
       '@types/node': 25.9.3
       long: 4.0.0
 
-  protobufjs@8.6.2:
+  protobufjs@8.6.4:
     dependencies:
       long: 5.3.2
 
