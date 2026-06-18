@@ -13,7 +13,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
     "@carbon-agent/shared-schemas": "workspace:*",
-    "openai": "^4.80.0"
+    "openai": "^6.44.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
