@@ -25,7 +25,7 @@
     "acorn": "^8.14.0",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
-    "typescript-eslint": "^8.60.1"
+    "typescript-eslint": "^8.62.1"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
